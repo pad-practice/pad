@@ -286,9 +286,6 @@ body {
 	z-index:1;
 	position:relative;
 }
-.cornerblock{
-width:20px;height:20px;position:absolute;top:-1px;
-}
 .jammer { background-image:url(img/Jammer.png) }
 .black { background-color:#000 }
 .poison { background-image:url(img/Poison.png) }
@@ -547,17 +544,20 @@ border:1px solid #616261; -webkit-border-radius: 3px; -moz-border-radius: 3px;bo
 }
 
 @media (max-width: 600px) {
-	/* Full-height app layout: the board is pinned to the bottom of the
-	   screen (roughly the bottom third, like the real game) and everything
-	   else stacks above it, so the page itself never scrolls. Only the
-	   saved-boards list scrolls, and only within its own area if it's long.
-	   env(safe-area-inset-*) keeps content clear of the notch/status bar and
-	   the home indicator (needs viewport-fit=cover on the viewport meta). */
-	html, body {
+	/* Full-height app layout for the practice page only (html.practicePage,
+	   set in index.html — rankings/speedrun keep normal page scrolling since
+	   their content can run longer than one screen). The board is pinned to
+	   the bottom of the screen (roughly the bottom third, like the real
+	   game) and everything else stacks above it, so the page itself never
+	   scrolls. Only the saved-boards list scrolls, and only within its own
+	   area if it's long. env(safe-area-inset-*) keeps content clear of the
+	   notch/status bar and the home indicator (needs viewport-fit=cover on
+	   the viewport meta). */
+	html.practicePage, html.practicePage body {
 		height:100%;
 		overflow:hidden;
 	}
-	#wrapwrap {
+	html.practicePage #wrapwrap {
 		display:flex;
 		flex-direction:column;
 		height:100vh;
@@ -566,24 +566,24 @@ border:1px solid #616261; -webkit-border-radius: 3px; -moz-border-radius: 3px;bo
 		padding-top:env(safe-area-inset-top);
 		padding-bottom:env(safe-area-inset-bottom);
 	}
-	#lineback { flex:none; }
-	#buttons {
+	html.practicePage #lineback { flex:none; }
+	html.practicePage #buttons {
 		order:1;
 		flex:none;
 	}
-	#game {
+	html.practicePage #game {
 		order:2;
 		flex:none;
 		margin-top:10px;
 	}
-	#library {
+	html.practicePage #library {
 		order:3;
 		flex:1 1 auto;
 		min-height:0;
 		overflow-y:auto;
 		margin-top:10px;
 	}
-	#infobooth {
+	html.practicePage #infobooth {
 		order:4;
 		flex:none;
 		min-height:0;
@@ -595,12 +595,12 @@ border:1px solid #616261; -webkit-border-radius: 3px; -moz-border-radius: 3px;bo
 		border-radius:0;
 		padding:0 10px;
 	}
-	#wrapwrap.options-open #infobooth {
+	html.practicePage #wrapwrap.options-open #infobooth {
 		background:var(--panel-bg);
 		border-radius:10px;
 		padding:16px;
 	}
-	#board {
+	html.practicePage #board {
 		order:5;
 		flex:none;
 		margin-top:10px;
@@ -613,11 +613,11 @@ border:1px solid #616261; -webkit-border-radius: 3px; -moz-border-radius: 3px;bo
 	   while it's open the board (and the saved-boards list) are hidden and
 	   the options panel fills the freed space. Closing it (✕ button, or
 	   switching mode) restores the board. */
-	#wrapwrap.options-open #board,
-	#wrapwrap.options-open #library {
+	html.practicePage #wrapwrap.options-open #board,
+	html.practicePage #wrapwrap.options-open #library {
 		display:none;
 	}
-	#wrapwrap.options-open #infobooth {
+	html.practicePage #wrapwrap.options-open #infobooth {
 		flex:1 1 auto;
 		overflow-y:auto;
 	}

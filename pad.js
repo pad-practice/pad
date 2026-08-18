@@ -9,7 +9,6 @@ var colors = ['blue','green','red','light','dark','heart']
 	, dropSpeed = 300
 	, scale = 90
 	, offsetMargin = 0
-	, cornerspace = 20
 	, rows = 6, cols = 5
 	, scoreTracker = []
 	, swapHasHappened = 0
@@ -1331,31 +1330,6 @@ function applyResponsiveLayout(force){
 	canvas.height = scale * cols;
 	canvas.style.width = (scale * rows) + 'px';
 	canvas.style.height = (scale * cols) + 'px';
-	$('.cornerblock').remove();
-	for (var i2 = 1; i2 < rows; i2++) {
-		for (var h2 = 1; h2 < cols; h2++) {
-		  $( "#board" ).append( "<div class='cornerblock' style='left:"+((scale*i2)-(cornerspace/2))+"px;top:"+((scale*h2)-(cornerspace/2))+"px'></div>" );
-		}
-	}
-	bindCornerblockDroppable();
-}
-
-function bindCornerblockDroppable(){
-	$( ".cornerblock" ).droppable({
-		tolerance: "pointer",
-		over: function( event, ui ) {
-			var cornerblockcount = 0;
-			$( ".tile" ).each(function() {
-				if (cornerblockcount++<30) $(this).droppable('option', 'disabled', true);
-			});
-		},
-		out: function( event, ui ) {
-			var cornerblockcount = 0;
-			$( ".tile" ).each(function() {
-				if (cornerblockcount++<30) $(this).droppable('option', 'disabled', false);
-			});
-		}
-	});
 }
 
 // Rebuilds the tile grid from scratch: used at page load and whenever
@@ -1386,9 +1360,6 @@ function buildBoardBackground(){
 	}
 }
 
-// (Re)binds jQuery UI draggable/droppable to the current .tile elements.
-// Must be called again after buildTiles() since jQuery UI widgets only
-// attach to elements that exist at the time it's called.
 // Slides a displaced orb from its old on-screen spot to its new one
 // (FLIP, same idea as the fall animation) so drag swaps read as the orb
 // smoothly flowing out of the way instead of teleporting.
@@ -1407,9 +1378,52 @@ function animateSwapSlide(el, fromLeft, fromTop){
 	}, 110);
 }
 
+// Converts the dragged tile's clamped screen offset (kept inside #board
+// by the draggable's `containment` option, however far outside it the
+// real pointer actually strays) into the board position whose cell the
+// pointer's centre currently falls in.
+function offsetToPosition(offsetLeft, offsetTop){
+	var tilesRect = document.getElementById('tiles').getBoundingClientRect();
+	var cursorX = offsetLeft + scale/2 - tilesRect.left;
+	var cursorY = offsetTop + scale/2 - tilesRect.top;
+	var col = Math.min(rows-1, Math.max(0, Math.floor(cursorX / scale)));
+	var row = Math.min(cols-1, Math.max(0, Math.floor(cursorY / scale)));
+	return convertPosition(col, row);
+}
+
+// Swaps the dragged tile into an orthogonally-adjacent target position,
+// plus the same bookkeeping (skyfall snapshot, slide animation, timer
+// start) the old droppable "over" handler used to do.
+function performDragSwap(draggedEl, targetPos){
+	var target = divs[targetPos];
+	if (!target || target === draggedEl) return;
+	var firstSwap = (swapHasHappened == 0);
+	if (skyFall == 1 && swapHasHappened == 0) saveBoardState();
+	var displacedRect = target.getBoundingClientRect();
+	$(draggedEl).swap(target, 2);
+	animateSwapSlide(target, displacedRect.left, displacedRect.top);
+	swapHasHappened = 1;
+	// The timer (制限/計測/CtW) starts on the first actual swap, not when
+	// the drop is first picked up.
+	if (firstSwap) {
+		if (changeTheWorldOn == 1) {
+			startChangeTheWorldTimer();
+		}
+		else if (timerOn == 1) {
+			timeOut.push(setTimeout(function(){ $(document).trigger("mouseup"); },timerTime));
+			start();
+		}
+		else if (measureOn == 1) {
+			start();
+		}
+	}
+}
+
+// (Re)binds jQuery UI draggable to the current .tile elements. Must be
+// called again after buildTiles() since jQuery UI widgets only attach to
+// elements that exist at the time it's called.
 function bindTileDragDrop(){
 	$( ".tile" ).draggable({
-		refreshPositions:"true",
 		containment: "#board",
 		helper: "clone",
 		opacity: 0.8,
@@ -1419,6 +1433,32 @@ function bindTileDragDrop(){
 			clearMemory('arrows');
 			replayMoveSet=[];
 		},
+		// Swaps are driven off the dragged tile's own (board-clamped) offset,
+		// walked one orthogonal cell at a time toward wherever the pointer
+		// currently maps to — rather than relying on jQuery UI droppable's
+		// geometric "over" intersection test on every other tile. That test
+		// only tracks the single cell the raw pointer geometrically
+		// overlaps, so once the real pointer leaves the board (e.g. arcing
+		// above the top row to reach a tile several columns over) it could
+		// skip past intermediate cells inconsistently instead of visiting
+		// each one in order. Walking the grid ourselves guarantees every
+		// cell the drag passes over gets swapped through — matching the
+		// "drag through several drops in one motion" combo move the real
+		// game supports — regardless of how far outside the board the
+		// pointer strays.
+		drag:function( event, ui ){
+			var target = offsetToPosition(ui.offset.left, ui.offset.top);
+			var guard = rows*cols; // safety cap against an infinite loop; never actually reached
+			while (guard-- > 0){
+				var current = Array.prototype.indexOf.call(divs, this);
+				if (current === target || current === -1) break;
+				var cx = current % rows, cy = Math.floor(current / rows);
+				var tx = target % rows, ty = Math.floor(target / rows);
+				if (cx !== tx) cx += (tx > cx) ? 1 : -1;
+				else if (cy !== ty) cy += (ty > cy) ? 1 : -1;
+				performDragSwap(this, cy*rows + cx);
+			}
+		},
 		stop:function( event, ui ){
 			$(this).css({ opacity:1 });
 			if (changeTheWorldOn == 0 && (measureOn == 1 || timerOn == 1)) {
@@ -1427,33 +1467,6 @@ function bindTileDragDrop(){
 			requestAction('solve', 1);
 		},
 		cursorAt: { top: scale/2, left: scale/2 }
-	});
-	$( ".tile" ).droppable({
-		accept: ".tile",
-		tolerance: "pointer",
-		over: function( event, ui ){
-			var draggable = ui.draggable, droppable = $(this);
-			var firstSwap = (swapHasHappened == 0);
-			if (skyFall == 1 && swapHasHappened == 0) saveBoardState();
-			var displacedRect = droppable[0].getBoundingClientRect();
-			draggable.swap(droppable, 2);
-			animateSwapSlide(droppable[0], displacedRect.left, displacedRect.top);
-			swapHasHappened = 1;
-			// The timer (制限/計測/CtW) starts on the first actual swap,
-			// not when the drop is first picked up.
-			if (firstSwap) {
-				if (changeTheWorldOn == 1) {
-					startChangeTheWorldTimer();
-				}
-				else if (timerOn == 1) {
-					timeOut.push(setTimeout(function(){ $(document).trigger("mouseup"); },timerTime));
-					start();
-				}
-				else if (measureOn == 1) {
-					start();
-				}
-			}
-		}
 	});
 	if (appMode != 'play') toggle('draggable', 0);
 }
