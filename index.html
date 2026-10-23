@@ -2,7 +2,7 @@
 <html lang="ja" class="practicePage">
 <head>
 	<meta charset="utf-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 	<meta name="description" content="パズドラ盤面練習アプリ" />
 	<title>Puzzle Practice</title>
 	<link rel="manifest" href="manifest.json">
@@ -13,10 +13,10 @@
 	<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
 	<script src="https://code.jquery.com/jquery-1.11.3.min.js"></script>
 	<script src="https://code.jquery.com/ui/1.11.3/jquery-ui.min.js"></script>
-	<link rel="stylesheet" type="text/css" href="pad.css?v10">
+	<link rel="stylesheet" type="text/css" href="pad.css?v11">
 	<link rel="stylesheet" type="text/css" href="menu.css?v3">
 	<link rel="shortcut icon" href="favicon.ico" />
-	<script src="pad.js?v9"></script>
+	<script src="pad.js?v10"></script>
 </head>
 <body><div id="wrapwrap">
 	<div id="lineback">
@@ -113,14 +113,18 @@
 		<br /><button onclick="requestAction('convert')" id="convert">convert</button></div>
 	</div>
 	<div id="library">
-		<div id="libraryHeader">
-			<div style="float:left;line-height:30px;font-weight:bold">保存した盤面</div>
-			<button onclick="requestAction('savepattern')" style="float:right">現在の盤面を保存</button>
-		</div>
-		<div id="libraryList"></div>
+		<button id="openLibraryBtn" onclick="requestAction('openlibrary')">保存した盤面 (<span id="libraryCount">0</span>) &rsaquo;</button>
+		<button id="saveBoardBtn" onclick="requestAction('savepattern')">現在の盤面を保存</button>
 	</div>
 	<div id="infobooth">
 	</div><script src="jquery.ui.touch-punch.min.js"></script>
+</div>
+<div id="libraryPage">
+	<div id="libraryPageHeader">
+		<button onclick="requestAction('closelibrary')" id="libraryBackBtn">&lsaquo; 戻る</button>
+		<span id="libraryPageTitle">保存した盤面</span>
+	</div>
+	<div id="libraryList"></div>
 </div>
 <div id="menuOverlay"></div>
 <nav id="sideMenu">

@@ -133,54 +133,150 @@ body {
 #library {
 	width:100%;
 	max-width:500px;
-	background:var(--panel-bg);
-	padding:20px;
 	margin: 20px auto 0;
-	border-radius:10px;
-	box-shadow:var(--shadow);
-	min-height:60px;
+	display:flex;
+	gap:8px;
 	box-sizing:border-box;
 }
-#libraryHeader {
-	overflow:hidden;
-	margin-bottom:10px;
+#library button {
+	border: 1px solid var(--panel-border);
+	background:var(--panel-bg);
+	color:var(--text);
+	padding:8px 10px;
+	border-radius:8px;
+	cursor:pointer;
+	box-shadow:var(--shadow);
 }
-#libraryHeader button {
+#library button:hover {
+	background:var(--panel-hover);
+}
+#openLibraryBtn {
+	flex:1 1 auto;
+	text-align:left;
+	font-weight:bold;
+}
+#saveBoardBtn {
+	flex:none;
+}
+
+/* Saved-boards picker: a full-screen page of its own laid over the app,
+   so a long list scrolls here instead of squeezing the puzzle screen.
+   Opened from #openLibraryBtn; tapping a board loads it and closes. */
+#libraryPage {
+	display:none;
+	position:fixed;
+	top:0; left:0; right:0; bottom:0;
+	z-index:50;
+	overflow-y:auto;
+	-webkit-overflow-scrolling:touch;
+	overscroll-behavior:contain;
+	background:#0a0e1c;
+	padding-bottom:env(safe-area-inset-bottom);
+}
+#libraryPage.open {
+	display:block;
+}
+body.libraryOpen {
+	overflow:hidden;
+}
+#libraryPageHeader {
+	position:sticky;
+	top:0;
+	z-index:1;
+	max-width:540px;
+	margin:0 auto;
+	box-sizing:border-box;
+	padding:calc(8px + env(safe-area-inset-top)) 10px 8px;
+	background:var(--panel-bg);
+	border-bottom:3px solid transparent;
+	border-image:var(--accent-gradient) 1;
+	box-shadow:var(--shadow);
+	display:flex;
+	align-items:center;
+	gap:10px;
+}
+#libraryBackBtn {
 	border: 1px solid var(--panel-border);
 	background:var(--panel-bg-2);
 	color:var(--text);
-	padding:4px 10px;
+	padding:4px 12px;
+	border-radius:6px;
+	cursor:pointer;
 }
-#libraryHeader button:hover {
-	background:var(--panel-hover);
+#libraryPageTitle {
+	font-weight:bold;
+	font-size:16px;
+}
+#libraryList {
+	max-width:540px;
+	margin:0 auto;
+	padding:12px 10px 24px;
+	box-sizing:border-box;
 }
 .libraryItem {
+	background:var(--panel-bg);
+	border:1px solid var(--panel-border);
+	border-radius:10px;
+	padding:10px;
+	margin-bottom:12px;
+	cursor:pointer;
+	box-shadow:var(--shadow);
+}
+.libraryItem:hover {
+	background:var(--panel-bg-2);
+}
+.libraryItem .libHead {
 	display:flex;
 	align-items:center;
 	justify-content:space-between;
-	padding:6px 0;
-	border-bottom:1px solid var(--panel-border);
+	margin-bottom:8px;
 }
 .libraryItem .libName {
 	font-weight:bold;
+	font-size:15px;
+	word-break:break-all;
 }
 .libraryItem .libMeta {
+	display:block;
 	color:var(--text-muted);
 	font-size:12px;
-	margin-left:8px;
 }
-.libraryItem .libActions button {
+.libraryItem .libDelete {
+	flex:none;
 	border: 1px solid var(--panel-border);
 	background:var(--panel-bg-2);
 	color:var(--text);
-	margin-left:6px;
-	padding:2px 8px;
+	margin-left:8px;
+	padding:4px 10px;
+	border-radius:6px;
+	cursor:pointer;
 }
-.libraryItem .libActions button:hover {
+.libraryItem .libDelete:hover {
 	background:var(--panel-hover);
+}
+.miniBoard {
+	display:grid;
+	width:100%;
+	max-width:300px;
+	margin:0 auto;
+	border:6px solid #22242e;
+	box-sizing:border-box;
+}
+.miniCell {
+	aspect-ratio:1;
+	background-size:100% 100%;
+}
+.miniCell.bg1 { background-image:url('img/bg1.png'); }
+.miniCell.bg2 { background-image:url('img/bg2.png'); }
+.miniCell img {
+	display:block;
+	width:100%;
+	height:100%;
 }
 .libraryEmpty {
 	color:var(--text-muted);
+	text-align:center;
+	padding:30px 0;
 }
 .image1 {
 	background:url("img/atk.svg")
@@ -543,6 +639,15 @@ border:1px solid #616261; -webkit-border-radius: 3px; -moz-border-radius: 3px;bo
 	border-color:var(--accent);
 }
 
+/* Practice page: no pinch / double-tap zoom anywhere (a stray double tap
+   near the top buttons used to zoom the page). Panning stays allowed so
+   scrollable areas like the saved-boards page still scroll. touch-action
+   is not inherited, so it's set on every element; iOS Safari also needs
+   the gesturestart handler in pad.js. */
+html.practicePage, html.practicePage * {
+	touch-action:pan-x pan-y;
+}
+
 @media (max-width: 600px) {
 	/* Full-height app layout for the practice page only (html.practicePage,
 	   set in index.html — rankings/speedrun keep normal page scrolling since
@@ -578,14 +683,15 @@ border:1px solid #616261; -webkit-border-radius: 3px; -moz-border-radius: 3px;bo
 	}
 	html.practicePage #library {
 		order:3;
-		flex:1 1 auto;
-		min-height:0;
-		overflow-y:auto;
+		flex:none;
 		margin-top:10px;
 	}
 	html.practicePage #infobooth {
 		order:4;
-		flex:none;
+		/* takes the slack between the controls and the board, so the board
+		   stays pinned to the bottom; long messages scroll inside it */
+		flex:1 1 auto;
+		overflow-y:auto;
 		min-height:0;
 		margin-top:6px;
 		/* transparent + light padding so an empty message area doesn't leave

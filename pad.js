@@ -1535,9 +1535,11 @@ function savePatternToLibrary(){
 }
 
 function renderLibrary(){
+	var list = loadLibrary();
+	var countEl = document.getElementById('libraryCount');
+	if (countEl) countEl.textContent = list.length;
 	var container = document.getElementById('libraryList');
 	if (!container) return;
-	var list = loadLibrary();
 	if (list.length == 0) {
 		container.innerHTML = '<div class="libraryEmpty">まだ保存された盤面はありません</div>';
 		return;
@@ -1546,14 +1548,52 @@ function renderLibrary(){
 	for (var i=0;i<list.length;i++){
 		var item = list[i];
 		var d = new Date(item.saved);
-		html += '<div class="libraryItem"><div><span class="libName">' + escapeHtml(item.name) + '</span>'
-			+ '<span class="libMeta">' + item.cols + 'x' + item.rows + ' / ' + d.toLocaleString() + '</span></div>'
-			+ '<div class="libActions">'
-			+ '<button onclick="requestAction(\'loadsaved\', ' + i + ')">読込</button>'
-			+ '<button onclick="requestAction(\'deletesaved\', ' + i + ')">削除</button>'
-			+ '</div></div>';
+		html += '<div class="libraryItem" onclick="requestAction(\'loadsaved\', ' + i + ')">'
+			+ '<div class="libHead"><div><span class="libName">' + escapeHtml(item.name) + '</span>'
+			+ '<span class="libMeta">' + item.cols + '&times;' + item.rows + ' / ' + d.toLocaleString() + '</span></div>'
+			+ '<button class="libDelete" onclick="event.stopPropagation(); requestAction(\'deletesaved\', ' + i + ')">削除</button>'
+			+ '</div>' + miniBoardHtml(item) + '</div>';
 	}
 	container.innerHTML = html;
+}
+
+// Small read-only picture of a saved board for the picker page. Same
+// layout as the live board: `rows` is the width, index i sits at
+// (i % rows, floor(i / rows)).
+function miniBoardHtml(item){
+	var html = '<div class="miniBoard" style="grid-template-columns:repeat(' + item.rows + ',1fr)">';
+	for (var i=0;i<item.rows*item.cols;i++){
+		var x = i % item.rows, y = Math.floor(i / item.rows);
+		var color = toColor(item.pattern.charAt(i) || '');
+		html += '<div class="miniCell ' + (((x+y) % 2 == 0) ? 'bg1' : 'bg2') + '">'
+			+ (color ? '<img src="img/' + capitaliseFirstLetter(color) + '.png" alt="">' : '')
+			+ '</div>';
+	}
+	return html + '</div>';
+}
+
+// The picker is shown as its own page; a history entry is pushed so the
+// browser/Android back button closes it instead of leaving the app.
+function openLibraryPage(){
+	renderLibrary();
+	var page = document.getElementById('libraryPage');
+	page.classList.add('open');
+	page.scrollTop = 0;
+	document.body.classList.add('libraryOpen');
+	if (!(history.state && history.state.libraryPage)) history.pushState({ libraryPage: 1 }, '', '#saved');
+}
+
+function closeLibraryPage(){
+	if (history.state && history.state.libraryPage) {
+		history.back(); // popstate handler does the hiding
+		return;
+	}
+	hideLibraryPage();
+}
+
+function hideLibraryPage(){
+	document.getElementById('libraryPage').classList.remove('open');
+	document.body.classList.remove('libraryOpen');
 }
 
 function loadSavedPattern(index){
@@ -1561,12 +1601,12 @@ function loadSavedPattern(index){
 	var item = list[index];
 	if (!item) return;
 	if (item.rows != rows || item.cols != cols){
-		displayOutput('この盤面は別のサイズ(' + item.cols + 'x' + item.rows + ')で保存されています。同じサイズでページを開き直してください。<br />', 0);
-		return;
+		setBoardSize(item.rows, item.cols);
 	}
 	document.getElementById('entry').value = item.pattern;
 	replayMoveSet = item.replay ? item.replay.slice() : [];
 	requestAction('applypattern', 2);
+	closeLibraryPage();
 	displayOutput('"' + escapeHtml(item.name) + '" を読み込みました<br />', 0);
 }
 
@@ -1675,6 +1715,8 @@ function requestAction(action, modifier){ // CLEAN IT UP
 	if (action == 'solve2' || action == 'fielddropped') solveBoard(2);
 	if (action == 'savepattern') savePatternToLibrary();
 	if (action == 'loadsaved') loadSavedPattern(modifier);
+	if (action == 'openlibrary') openLibraryPage();
+	if (action == 'closelibrary') closeLibraryPage();
 	if (action == 'deletesaved') deleteSavedPattern(modifier);
 	if (action == 'options') {
 		// On mobile the board can't share the screen with the options panel
@@ -1857,6 +1899,21 @@ $(function(){		// CURSOR AT AND MOVING ORB SIZE
 	saveBoardState();
 	clearMemory('score');
 	renderLibrary();
+	// A reload while the picker was open leaves #saved behind; start on
+	// the board instead.
+	if (location.hash == '#saved') history.replaceState(null, '', location.pathname + location.search);
+	window.addEventListener('popstate', function(){
+		if (!(history.state && history.state.libraryPage)) hideLibraryPage();
+	});
+
+	// iOS Safari ignores user-scalable=no and touch-action for pinch zoom;
+	// cancelling its gesture events is what actually stops it.
+	['gesturestart', 'gesturechange', 'gestureend'].forEach(function(type){
+		document.addEventListener(type, function(e){ e.preventDefault(); }, { passive: false });
+	});
+	document.addEventListener('touchmove', function(e){
+		if (e.touches.length > 1) e.preventDefault();
+	}, { passive: false });
 
 	// Keeps the orb-count bar in sync with any board change (paints,
 	// generation, clears, refills) without touching every code path.
