@@ -1378,26 +1378,30 @@ function animateSwapSlide(el, fromLeft, fromTop){
 	}, 110);
 }
 
-// How close (as a fraction of a tile) the pointer must get to a cell's
-// centre before the drag counts as having entered it. Keeping this under
-// half a tile leaves the corners between cells as a dead zone, so a
-// diagonal drag that cuts across a corner goes straight to the diagonal
-// cell instead of first tripping one of its orthogonal neighbours.
-var DRAG_ENTER_RADIUS = 0.42;
+// Radius (as a fraction of a tile) of the small dead zone around each
+// interior grid corner. A diagonal drag cuts right through a corner, so
+// while the pointer is that close to one the drag holds still instead of
+// tripping an orthogonal neighbour first; on leaving the zone it lands
+// in the diagonal cell. Everywhere else a cell counts as entered as soon
+// as the pointer crosses into it, so ordinary moves stay instant.
+var DRAG_CORNER_RADIUS = 0.25;
 
 // Converts the dragged tile's clamped screen offset (kept inside #board
 // by the draggable's `containment` option, however far outside it the
 // real pointer actually strays) into the board position whose cell the
 // pointer's centre currently falls in, or -1 while the pointer sits in
-// the dead zone near a cell's corners.
+// a corner dead zone.
 function offsetToPosition(offsetLeft, offsetTop){
 	var tilesRect = document.getElementById('tiles').getBoundingClientRect();
-	var cursorX = offsetLeft + scale/2 - tilesRect.left;
-	var cursorY = offsetTop + scale/2 - tilesRect.top;
-	var col = Math.min(rows-1, Math.max(0, Math.floor(cursorX / scale)));
-	var row = Math.min(cols-1, Math.max(0, Math.floor(cursorY / scale)));
-	var dx = cursorX - (col + 0.5)*scale, dy = cursorY - (row + 0.5)*scale;
-	if (dx*dx + dy*dy > Math.pow(DRAG_ENTER_RADIUS*scale, 2)) return -1;
+	var fx = (offsetLeft + scale/2 - tilesRect.left) / scale;
+	var fy = (offsetTop + scale/2 - tilesRect.top) / scale;
+	var nx = Math.round(fx), ny = Math.round(fy);
+	if (nx > 0 && nx < rows && ny > 0 && ny < cols) {
+		var dx = fx - nx, dy = fy - ny;
+		if (dx*dx + dy*dy < DRAG_CORNER_RADIUS*DRAG_CORNER_RADIUS) return -1;
+	}
+	var col = Math.min(rows-1, Math.max(0, Math.floor(fx)));
+	var row = Math.min(cols-1, Math.max(0, Math.floor(fy)));
 	return convertPosition(col, row);
 }
 
