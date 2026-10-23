@@ -435,6 +435,16 @@ border:1px solid #616261; -webkit-border-radius: 3px; -moz-border-radius: 3px;bo
 #modeToggle {
 	display:inline-block;
 }
+/* Play / Edit / 解析 are the main mode switch: bigger tap targets than
+   the other pill buttons so they're easy to hit without fumbling. */
+#modeToggle .modebutton {
+	font-size:15px;
+	font-weight:bold;
+	line-height:20px;
+	padding:7px 16px;
+	border-radius:18px;
+	margin-left:4px;
+}
 .modebutton {
 	border: 1px solid var(--panel-border);
 	background:var(--panel-bg);

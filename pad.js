@@ -1378,20 +1378,30 @@ function animateSwapSlide(el, fromLeft, fromTop){
 	}, 110);
 }
 
+// How close (as a fraction of a tile) the pointer must get to a cell's
+// centre before the drag counts as having entered it. Keeping this under
+// half a tile leaves the corners between cells as a dead zone, so a
+// diagonal drag that cuts across a corner goes straight to the diagonal
+// cell instead of first tripping one of its orthogonal neighbours.
+var DRAG_ENTER_RADIUS = 0.42;
+
 // Converts the dragged tile's clamped screen offset (kept inside #board
 // by the draggable's `containment` option, however far outside it the
 // real pointer actually strays) into the board position whose cell the
-// pointer's centre currently falls in.
+// pointer's centre currently falls in, or -1 while the pointer sits in
+// the dead zone near a cell's corners.
 function offsetToPosition(offsetLeft, offsetTop){
 	var tilesRect = document.getElementById('tiles').getBoundingClientRect();
 	var cursorX = offsetLeft + scale/2 - tilesRect.left;
 	var cursorY = offsetTop + scale/2 - tilesRect.top;
 	var col = Math.min(rows-1, Math.max(0, Math.floor(cursorX / scale)));
 	var row = Math.min(cols-1, Math.max(0, Math.floor(cursorY / scale)));
+	var dx = cursorX - (col + 0.5)*scale, dy = cursorY - (row + 0.5)*scale;
+	if (dx*dx + dy*dy > Math.pow(DRAG_ENTER_RADIUS*scale, 2)) return -1;
 	return convertPosition(col, row);
 }
 
-// Swaps the dragged tile into an orthogonally-adjacent target position,
+// Swaps the dragged tile into an adjacent (orthogonal or diagonal) target position,
 // plus the same bookkeeping (skyfall snapshot, slide animation, timer
 // start) the old droppable "over" handler used to do.
 function performDragSwap(draggedEl, targetPos){
@@ -1434,7 +1444,8 @@ function bindTileDragDrop(){
 			replayMoveSet=[];
 		},
 		// Swaps are driven off the dragged tile's own (board-clamped) offset,
-		// walked one orthogonal cell at a time toward wherever the pointer
+		// walked one cell at a time (diagonal steps included, like the
+		// real game) toward wherever the pointer
 		// currently maps to — rather than relying on jQuery UI droppable's
 		// geometric "over" intersection test on every other tile. That test
 		// only tracks the single cell the raw pointer geometrically
@@ -1448,6 +1459,7 @@ function bindTileDragDrop(){
 		// pointer strays.
 		drag:function( event, ui ){
 			var target = offsetToPosition(ui.offset.left, ui.offset.top);
+			if (target === -1) return;
 			var guard = rows*cols; // safety cap against an infinite loop; never actually reached
 			while (guard-- > 0){
 				var current = Array.prototype.indexOf.call(divs, this);
@@ -1455,7 +1467,7 @@ function bindTileDragDrop(){
 				var cx = current % rows, cy = Math.floor(current / rows);
 				var tx = target % rows, ty = Math.floor(target / rows);
 				if (cx !== tx) cx += (tx > cx) ? 1 : -1;
-				else if (cy !== ty) cy += (ty > cy) ? 1 : -1;
+				if (cy !== ty) cy += (ty > cy) ? 1 : -1;
 				performDragSwap(this, cy*rows + cx);
 			}
 		},
