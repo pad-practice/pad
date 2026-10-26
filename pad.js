@@ -1378,31 +1378,100 @@ function animateSwapSlide(el, fromLeft, fromTop){
 	}, 110);
 }
 
-// Radius (as a fraction of a tile) of the small dead zone around each
-// interior grid corner. A diagonal drag cuts right through a corner, so
-// while the pointer is that close to one the drag holds still instead of
-// tripping an orthogonal neighbour first; on leaving the zone it lands
-// in the diagonal cell. Everywhere else a cell counts as entered as soon
-// as the pointer crosses into it, so ordinary moves stay instant.
+// Diagonal moves use "corner cut" undo instead of a dead zone, so
+// ordinary moves stay instant: crossing into an orthogonal neighbour
+// swaps right away, but if that crossing happened within this distance
+// (fraction of a tile) of a grid corner and the pointer then crosses on
+// into the diagonal cell near that same corner, the orthogonal swap is
+// taken back and replaced by one diagonal swap.
 var DRAG_CORNER_RADIUS = 0.25;
 
-// Converts the dragged tile's clamped screen offset (kept inside #board
-// by the draggable's `containment` option, however far outside it the
-// real pointer actually strays) into the board position whose cell the
-// pointer's centre currently falls in, or -1 while the pointer sits in
-// a corner dead zone.
-function offsetToPosition(offsetLeft, offsetTop){
+// Pointer position for the dragged tile, in tile units over the grid
+// (0..rows, 0..cols), from its clamped screen offset (kept inside #board
+// by the draggable's `containment` option however far outside it the
+// real pointer strays).
+function dragPointerInTiles(offsetLeft, offsetTop){
 	var tilesRect = document.getElementById('tiles').getBoundingClientRect();
-	var fx = (offsetLeft + scale/2 - tilesRect.left) / scale;
-	var fy = (offsetTop + scale/2 - tilesRect.top) / scale;
-	var nx = Math.round(fx), ny = Math.round(fy);
-	if (nx > 0 && nx < rows && ny > 0 && ny < cols) {
-		var dx = fx - nx, dy = fy - ny;
-		if (dx*dx + dy*dy < DRAG_CORNER_RADIUS*DRAG_CORNER_RADIUS) return -1;
+	var maxX = rows - 1e-6, maxY = cols - 1e-6;
+	return {
+		x: Math.min(maxX, Math.max(0, (offsetLeft + scale/2 - tilesRect.left) / scale)),
+		y: Math.min(maxY, Math.max(0, (offsetTop + scale/2 - tilesRect.top) / scale))
+	};
+}
+
+// Visits, in order, every cell the straight segment from `from` to `to`
+// passes through (grid traversal), calling onCell(col, row, crossPoint)
+// for each newly entered one. Touch/mouse events arrive at the device's
+// own rate (60-120+/s) and a fast swipe can move more than a tile between
+// two of them, so following the segment — rather than jumping to the
+// last sampled cell — makes the swaps follow the path the finger
+// actually traced, the same on every device.
+function traceDragSegment(from, to, onCell){
+	var cx = Math.floor(from.x), cy = Math.floor(from.y);
+	var ex = Math.floor(to.x), ey = Math.floor(to.y);
+	var dx = to.x - from.x, dy = to.y - from.y;
+	var stepX = dx > 0 ? 1 : -1, stepY = dy > 0 ? 1 : -1;
+	var tMaxX = dx != 0 ? ((dx > 0 ? cx + 1 : cx) - from.x) / dx : Infinity;
+	var tMaxY = dy != 0 ? ((dy > 0 ? cy + 1 : cy) - from.y) / dy : Infinity;
+	var tDeltaX = dx != 0 ? Math.abs(1 / dx) : Infinity;
+	var tDeltaY = dy != 0 ? Math.abs(1 / dy) : Infinity;
+	var guard = rows + cols + 2;
+	while ((cx != ex || cy != ey) && guard-- > 0){
+		var t;
+		if (Math.abs(tMaxX - tMaxY) < 1e-9) { // exactly through a corner
+			t = tMaxX; cx += stepX; cy += stepY; tMaxX += tDeltaX; tMaxY += tDeltaY;
+		}
+		else if (tMaxX < tMaxY) { t = tMaxX; cx += stepX; tMaxX += tDeltaX; }
+		else { t = tMaxY; cy += stepY; tMaxY += tDeltaY; }
+		onCell(cx, cy, { x: from.x + dx*t, y: from.y + dy*t });
 	}
-	var col = Math.min(rows-1, Math.max(0, Math.floor(fx)));
-	var row = Math.min(cols-1, Math.max(0, Math.floor(fy)));
-	return convertPosition(col, row);
+}
+
+// The grid corner nearest `pt` if it's an interior one within
+// DRAG_CORNER_RADIUS (edge corners can't lead anywhere diagonal).
+function nearDragCorner(pt){
+	var nx = Math.round(pt.x), ny = Math.round(pt.y);
+	if (nx <= 0 || nx >= rows || ny <= 0 || ny >= cols) return null;
+	var ddx = pt.x - nx, ddy = pt.y - ny;
+	if (ddx*ddx + ddy*ddy >= DRAG_CORNER_RADIUS*DRAG_CORNER_RADIUS) return null;
+	return { x: nx, y: ny };
+}
+
+// Moves the dragged tile one step into (col,row), handling the corner-cut
+// undo described at DRAG_CORNER_RADIUS. `state` lives for one drag.
+function stepDragInto(draggedEl, state, col, row, crossPoint){
+	var current = Array.prototype.indexOf.call(divs, draggedEl);
+	if (current === -1) return;
+	var target = convertPosition(col, row);
+	var pending = state.cornerCut;
+	state.cornerCut = null;
+	if (pending && current === pending.orth) {
+		var fx = pending.from % rows, fy = Math.floor(pending.from / rows);
+		var corner = nearDragCorner(crossPoint);
+		if (Math.abs(col - fx) == 1 && Math.abs(row - fy) == 1 && corner
+			&& corner.x == pending.corner.x && corner.y == pending.corner.y) {
+			undoDragSwap(draggedEl, pending.from);
+			performDragSwap(draggedEl, target);
+			return;
+		}
+	}
+	performDragSwap(draggedEl, target);
+	var cx = current % rows, cy = Math.floor(current / rows);
+	if (Math.abs(col - cx) + Math.abs(row - cy) == 1) {
+		var c = nearDragCorner(crossPoint);
+		if (c) state.cornerCut = { from: current, orth: target, corner: c };
+	}
+}
+
+// Takes back the last drag swap: the dragged tile goes back to backPos
+// and the orb it displaced slides back, and the step leaves the replay.
+function undoDragSwap(draggedEl, backPos){
+	var target = divs[backPos];
+	if (!target || target === draggedEl) return;
+	var displacedRect = target.getBoundingClientRect();
+	$(draggedEl).swap(target);
+	animateSwapSlide(target, displacedRect.left, displacedRect.top);
+	replayMoveSet.pop();
 }
 
 // Swaps the dragged tile into an adjacent (orthogonal or diagonal) target position,
@@ -1444,38 +1513,39 @@ function bindTileDragDrop(){
 		zIndex: 3,
 		start:function( event, ui ){
 			$(this).css({ opacity:0.2 });
+			$(this).removeData('dragState');
 			clearMemory('arrows');
 			replayMoveSet=[];
 		},
 		// Swaps are driven off the dragged tile's own (board-clamped) offset,
-		// walked one cell at a time (diagonal steps included, like the
-		// real game) toward wherever the pointer
-		// currently maps to — rather than relying on jQuery UI droppable's
-		// geometric "over" intersection test on every other tile. That test
-		// only tracks the single cell the raw pointer geometrically
-		// overlaps, so once the real pointer leaves the board (e.g. arcing
-		// above the top row to reach a tile several columns over) it could
-		// skip past intermediate cells inconsistently instead of visiting
-		// each one in order. Walking the grid ourselves guarantees every
-		// cell the drag passes over gets swapped through — matching the
-		// "drag through several drops in one motion" combo move the real
-		// game supports — regardless of how far outside the board the
-		// pointer strays.
+		// following the segment between successive pointer samples cell by
+		// cell (traceDragSegment) — rather than relying on jQuery UI
+		// droppable's geometric "over" intersection test on every other
+		// tile. That test only tracks the single cell the raw pointer
+		// geometrically overlaps, so once the real pointer leaves the board
+		// (e.g. arcing above the top row to reach a tile several columns
+		// over) or moves fast it could skip past intermediate cells
+		// inconsistently. Tracing the path ourselves guarantees every cell
+		// the drag passes over gets swapped through, in order — matching
+		// the "drag through several drops in one motion" combo move the
+		// real game supports — however far outside the board the pointer
+		// strays and whatever rate the device reports moves at.
 		drag:function( event, ui ){
-			var target = offsetToPosition(ui.offset.left, ui.offset.top);
-			if (target === -1) return;
-			var guard = rows*cols; // safety cap against an infinite loop; never actually reached
-			while (guard-- > 0){
-				var current = Array.prototype.indexOf.call(divs, this);
-				if (current === target || current === -1) break;
-				var cx = current % rows, cy = Math.floor(current / rows);
-				var tx = target % rows, ty = Math.floor(target / rows);
-				if (cx !== tx) cx += (tx > cx) ? 1 : -1;
-				if (cy !== ty) cy += (ty > cy) ? 1 : -1;
-				performDragSwap(this, cy*rows + cx);
+			var el = this;
+			var state = $(el).data('dragState');
+			var pt = dragPointerInTiles(ui.offset.left, ui.offset.top);
+			if (!state) {
+				var cur = Array.prototype.indexOf.call(divs, el);
+				state = { last: { x: cur % rows + 0.5, y: Math.floor(cur / rows) + 0.5 }, cornerCut: null };
+				$(el).data('dragState', state);
 			}
+			traceDragSegment(state.last, pt, function(col, row, crossPoint){
+				stepDragInto(el, state, col, row, crossPoint);
+			});
+			state.last = pt;
 		},
 		stop:function( event, ui ){
+			$(this).removeData('dragState');
 			$(this).css({ opacity:1 });
 			if (changeTheWorldOn == 0 && (measureOn == 1 || timerOn == 1)) {
 				lastMeasuredTime = x.time();
