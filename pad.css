@@ -323,6 +323,14 @@ body.libraryOpen {
 	width:20px;
 	height:20px
 }
+/* Gear (options) in the header, sized to match the hamburger and the
+   enlarged Play / Edit / 解析 buttons. */
+#lineback .image6 {
+	width:30px;
+	height:30px;
+	background-size:30px 30px;
+	margin:3px 4px;
+}
 .tophelp {
 	float:left;
 	margin:2px;

@@ -13,10 +13,10 @@
 	<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
 	<script src="https://code.jquery.com/jquery-1.11.3.min.js"></script>
 	<script src="https://code.jquery.com/ui/1.11.3/jquery-ui.min.js"></script>
-	<link rel="stylesheet" type="text/css" href="pad.css?v12">
-	<link rel="stylesheet" type="text/css" href="menu.css?v3">
+	<link rel="stylesheet" type="text/css" href="pad.css?v13">
+	<link rel="stylesheet" type="text/css" href="menu.css?v4">
 	<link rel="shortcut icon" href="favicon.ico" />
-	<script src="pad.js?v13"></script>
+	<script src="pad.js?v14"></script>
 </head>
 <body><div id="wrapwrap">
 	<div id="lineback">
@@ -68,7 +68,7 @@
 			<button class="paletteSwatch jammer" onclick="requestAction('selectpaint', 'jammer')" title="Jammer"></button>
 			<button class="paletteSwatch poison" onclick="requestAction('selectpaint', 'poison')" title="Poison"></button>
 			<div id="genConfig">
-				Random生成(タップで色ON/OFF、数字で個数指定):
+				ランダム生成の設定(タップで色ON/OFF、数字で個数指定):
 				<div id="genCols">
 					<span class="genCol"><button id="genChip-red" class="genChip red selected" onclick="requestAction('genchip', 'red')"></button><input id="genCount-red" class="genCount" type="number" min="0" placeholder="-"></span>
 					<span class="genCol"><button id="genChip-blue" class="genChip blue selected" onclick="requestAction('genchip', 'blue')"></button><input id="genCount-blue" class="genCount" type="number" min="0" placeholder="-"></span>
@@ -99,7 +99,7 @@
 		<button id="showDrops" style="display:none" onclick="requestAction('showdrops')">Show Drops</button>
 	</div>
 	<div id="buttons">
-		<button id="random" class="editOnly" onclick="requestAction('editrandom')">Random</button>
+		<button id="random" class="editOnly" onclick="requestAction('editrandom')">ランダム生成</button>
 		<button class="playOnly" onclick="requestAction('loadboard')">Reset</button>
 		<button class="playOnly" onclick="requestAction('replay')">Replay</button>
 		<button class="playOnly" onclick="requestAction('copypattern')">Share</button>

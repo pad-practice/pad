@@ -1249,6 +1249,7 @@ function generateEditBoard(){
 	syncColorsFromGen();
 	replayMoveSet = [];
 	requestAction('copypattern');
+	return true;
 }
 
 function solveBoard(solvePortion){
@@ -1864,7 +1865,12 @@ function requestAction(action, modifier){ // CLEAN IT UP
 		var sizeParts = modifier.split('x');
 		setBoardSize(parseInt(sizeParts[0]), parseInt(sizeParts[1]));
 	}
-	if (action == 'editrandom') generateEditBoard();
+	if (action == 'editrandom' && generateEditBoard()) {
+		// Generating is the usual last step of setting up a board, so go
+		// straight to Play to start solving it right away.
+		requestAction('setmode', 'play');
+		displayOutput('盤面を生成しました。そのままパズルできます<br />', 0);
+	}
 	if (action == 'genchip') {
 		genSelected[modifier] = !genSelected[modifier];
 		document.getElementById('genChip-' + modifier).classList.toggle('selected', genSelected[modifier]);
