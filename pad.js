@@ -267,6 +267,7 @@ function toggle(item, command){
 		document.getElementById('modeAnalyzeBtn').classList.toggle('modebutton-active', appMode == 'analyze');
 		document.body.classList.toggle('edit-mode', appMode == 'edit');
 		document.body.classList.toggle('analyze-mode', appMode == 'analyze');
+		applyResponsiveLayout(); // each mode's panel is a different height; refit the board under it
 		if (appMode == 'edit') {
 			toggle('draggable', 0);
 			displayOutput('Editモード: パレットで色を選び、盤面のマスをタップすると塗り替えられます<br />', 0);
@@ -1313,9 +1314,61 @@ function debounce(fn, wait){
 // having to pinch-zoom. Everything else (drag math, canvas arrows, corner
 // blocks) already reads from `scale`, so keeping it in sync with the real
 // rendered size is enough to make the whole board responsive.
+// On phones the practice page is a single fixed screen (see pad.css):
+// the board sits under the controls and the page never scrolls. A full-
+// width board only fits when there's enough height for it — not in
+// Safari with its toolbars showing (not installed as an app), on short
+// phones like the iPhone SE, or under Edit mode's palette — so the board
+// is narrowed until it fits the height that's actually left. It never
+// goes below MIN_BOARD_FRACTION of the full width; if even that doesn't
+// fit, the board stays full width and the screen scrolls instead of
+// cutting it off.
+var MIN_BOARD_FRACTION = 0.6;
+
+function fitBoardToScreen(){
+	var boardEl = document.getElementById('board');
+	var wrap = document.getElementById('wrapwrap');
+	if (!document.documentElement.classList.contains('practicePage')
+		|| !window.matchMedia('(max-width: 600px)').matches) {
+		boardEl.style.maxWidth = '';
+		wrap.style.height = '';
+		wrap.classList.remove('tall-content');
+		return;
+	}
+	if (wrap.classList.contains('options-open')) return; // board is hidden
+	// iOS before 15.4 has no dvh, and its 100vh includes the area under
+	// Safari's toolbars, so use the real visible height there.
+	if (!(window.CSS && CSS.supports && CSS.supports('height', '100dvh'))) wrap.style.height = window.innerHeight + 'px';
+	var cs = getComputedStyle(wrap);
+	var avail = wrap.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+	for (var i = 0; i < wrap.children.length; i++){
+		var el = wrap.children[i];
+		if (el === boardEl || el.tagName == 'SCRIPT') continue;
+		var ecs = getComputedStyle(el);
+		if (ecs.display == 'none') continue;
+		// the message area flexes to fill whatever's left, so only its
+		// minimum height counts here
+		var h = (el.id == 'infobooth') ? (parseFloat(ecs.minHeight) || 0) : el.offsetHeight;
+		avail -= h + parseFloat(ecs.marginTop) + parseFloat(ecs.marginBottom);
+	}
+	var bcs = getComputedStyle(boardEl);
+	avail -= parseFloat(bcs.marginTop) + parseFloat(bcs.marginBottom);
+	var border = parseFloat(bcs.borderLeftWidth) || 0;
+	var full = Math.min(wrap.clientWidth, 540);
+	var fit = (avail - 2*border) * rows / cols + 2*border;
+	var minWidth = full * MIN_BOARD_FRACTION;
+	// if the screen has to scroll anyway, a full-size board is easier to use
+	var width = (fit < minWidth) ? full : Math.min(full, fit);
+	// whole-pixel tiles, so no stray strip is left along the right edge
+	width = Math.floor((width - 2*border) / rows) * rows + 2*border;
+	boardEl.style.maxWidth = width + 'px';
+	wrap.classList.toggle('tall-content', fit < minWidth);
+}
+
 function applyResponsiveLayout(force){
 	var boardEl = document.getElementById('board');
 	if (!boardEl || divs.length == 0) return;
+	fitBoardToScreen();
 	// The frame keeps its width; its height follows the current grid's
 	// aspect ratio (like the real game, where board heights differ a bit
 	// between sizes), so tiles always fill the frame exactly.
@@ -1985,6 +2038,20 @@ $(function(){		// CURSOR AT AND MOVING ORB SIZE
 	applyResponsiveLayout();
 	buildBoardBackground();
 	$(window).on('resize orientationchange', debounce(function(){ applyResponsiveLayout(); }, 150));
+	// The controls above the board change height on their own too (mode
+	// switch, 解析 results, countdown buttons), so refit whenever they do.
+	if (window.ResizeObserver) {
+		var refitQueued = false;
+		var refit = new ResizeObserver(function(){
+			if (refitQueued) return;
+			refitQueued = true;
+			setTimeout(function(){ refitQueued = false; applyResponsiveLayout(); }, 0);
+		});
+		['lineback', 'buttons', 'game', 'library'].forEach(function(id){
+			var el = document.getElementById(id);
+			if (el) refit.observe(el);
+		});
+	}
 	randomizeBoard();
 	updateBoardSizeButtons();
 
