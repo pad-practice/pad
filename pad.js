@@ -274,7 +274,7 @@ function toggle(item, command){
 		}
 		else if (appMode == 'analyze') {
 			toggle('draggable', 0);
-			displayOutput('解析モード: 「解析開始」を押すと、現在の盤面で最大コンボを組める最短ルートを探索します<br />', 0);
+			displayOutput('解析モード: 「解析開始」を押すと、現在の盤面で最大コンボを組める最短ルートを探索します。十字・L字などの消し方を条件に追加することもできます<br />', 0);
 		}
 		else {
 			selectedPaintColor = null;
@@ -886,8 +886,10 @@ function markRunsArr(b, marked){
 // Counts combos on a board copy, fully cascading falls (without skyfall,
 // so the result is deterministic). Mirrors getMatches' rules: runs of 3+
 // in a line, flood-filled into groups, group size over minimumMatches.
-function simulateCascade(b){
-	var combos = 0;
+// onGroup(color, cells, stage), if given, is called for every cleared
+// group; stage 0 is what the move itself clears, 1+ are cascades.
+function simulateCascade(b, onGroup){
+	var combos = 0, stage = 0;
 	while (true){
 		var marked = {};
 		markRunsArr(b, marked);
@@ -919,8 +921,11 @@ function simulateCascade(b){
 		}
 		if (!groups.length) break;
 		combos += groups.length;
-		for (var g = 0; g < groups.length; g++)
+		for (var g = 0; g < groups.length; g++){
+			if (onGroup) onGroup(b[groups[g][0]], groups[g], stage);
 			for (var m = 0; m < groups[g].length; m++) b[groups[g][m]] = null;
+		}
+		stage++;
 		for (var gx = 0; gx < rows; gx++){
 			var write = cols - 1;
 			for (var gy = cols - 1; gy >= 0; gy--){
@@ -957,6 +962,314 @@ function maxPossibleCombosFromCounts(b){
 	return total;
 }
 
+// ---- 解析の条件 (special-clear conditions) ----
+//
+// The user can ask for routes that make specific clears, e.g. "a fire
+// cross and a dark L". Each condition is { shape, color, count, size,
+// cascade }: `count` groups of that shape/colour are needed; `size` is
+// only used by 'atleast'; `cascade` says whether groups formed by
+// cascades (落ちコン) count, or only ones the move itself lines up.
+//
+// Row / column only need to *contain* a full line, so other orbs may be
+// joined to them. Every other shape only counts when the cleared group
+// is exactly that shape: a same-coloured orb touching it would merge
+// into a bigger, different group.
+var CLEAR_SHAPES = {
+	cross:   { label: '十字', cascade: false },
+	L:       { label: 'L字', cascade: false },
+	T:       { label: 'T字', cascade: false },
+	square:  { label: '3×3正方形', cascade: false },
+	four:    { label: '4個消し', cascade: false },
+	row:     { label: '横一列', cascade: true },
+	col:     { label: '縦一列', cascade: true },
+	atleast: { label: '○個以上', cascade: true }
+};
+var CONDITION_COLORS = [
+	['red', '火'], ['blue', '水'], ['green', '木'], ['light', '光'], ['dark', '闇'], ['heart', '回復'], ['any', '色指定なし']
+];
+var CONDITIONS_KEY = 'puzzlePracticeAnalyzeConds';
+var analysisConditions = [];
+var analysisObjective = 'maxcombo'; // or 'shortest': just meet the conditions in as few moves as possible
+
+function conditionColorLabel(color){
+	for (var i = 0; i < CONDITION_COLORS.length; i++) if (CONDITION_COLORS[i][0] == color) return CONDITION_COLORS[i][1];
+	return color;
+}
+
+function conditionLabel(cond){
+	var color = cond.color == 'any' ? '' : conditionColorLabel(cond.color);
+	var shape = cond.shape == 'atleast' ? cond.size + '個以上' : CLEAR_SHAPES[cond.shape].label;
+	return color + shape + (cond.count > 1 ? '×' + cond.count : '');
+}
+
+// Orbs one group of this shape uses up (for the feasibility check and
+// the combo target).
+function conditionOrbCount(cond){
+	switch (cond.shape){
+		case 'square': return 9;
+		case 'four': return 4;
+		case 'row': return rows;
+		case 'col': return cols;
+		case 'atleast': return cond.size;
+		default: return 5; // cross, L, T
+	}
+}
+
+// What shapes one cleared group (list of board positions) makes.
+function groupShapes(cells){
+	var set = {}, minX = rows, minY = cols, maxX = -1, maxY = -1;
+	for (var i = 0; i < cells.length; i++){
+		var x = cells[i] % rows, y = (cells[i] - x) / rows;
+		set[cells[i]] = true;
+		if (x < minX) minX = x;
+		if (x > maxX) maxX = x;
+		if (y < minY) minY = y;
+		if (y > maxY) maxY = y;
+	}
+	function has(x, y){ return set[y*rows + x] === true; }
+	var n = cells.length, w = maxX - minX + 1, h = maxY - minY + 1;
+	var r = { size: n };
+	if (n == 5 && w == 3 && h == 3){
+		var cx = minX + 1, cy = minY + 1;
+		var rowFull = function(y){ return has(minX, y) && has(minX+1, y) && has(minX+2, y); };
+		var colFull = function(x){ return has(x, minY) && has(x, minY+1) && has(x, minY+2); };
+		var edgeRow = rowFull(minY) || rowFull(maxY), edgeCol = colFull(minX) || colFull(maxX);
+		r.cross = rowFull(cy) && colFull(cx);
+		r.L = edgeRow && edgeCol;                                  // two edges meeting at a corner
+		r.T = (edgeRow && colFull(cx)) || (edgeCol && rowFull(cy)); // an edge plus the middle line
+	}
+	r.square = (n == 9 && w == 3 && h == 3);
+	r.four = (n == 4);
+	var xx, yy, full;
+	if (w == rows) for (yy = minY; yy <= maxY && !r.row; yy++){
+		full = true;
+		for (xx = 0; xx < rows && full; xx++) if (!has(xx, yy)) full = false;
+		r.row = full;
+	}
+	if (h == cols) for (xx = minX; xx <= maxX && !r.col; xx++){
+		full = true;
+		for (yy = 0; yy < cols && full; yy++) if (!has(xx, yy)) full = false;
+		r.col = full;
+	}
+	return r;
+}
+
+function groupMatchesCondition(cond, shapes){
+	return cond.shape == 'atleast' ? shapes.size >= cond.size : !!shapes[cond.shape];
+}
+
+// Every placement of a shape on the current board, for scoring how close
+// a board is to making it (see conditionCost). Each template is the
+// shape's cells plus, for exact shapes, the cells bordering it (orbs of
+// the same colour there would merge in and spoil the shape).
+function buildShapeTemplates(cond){
+	var list = [];
+	var exact = !(cond.shape == 'row' || cond.shape == 'col' || cond.shape == 'atleast');
+	function add(cellsXY){
+		var cells = [], inT = {}, border = [], seenB = {}, i;
+		for (i = 0; i < cellsXY.length; i++){
+			var p = cellsXY[i][1]*rows + cellsXY[i][0];
+			if (inT[p]) continue;
+			cells.push(p);
+			inT[p] = true;
+		}
+		if (exact) for (i = 0; i < cells.length; i++){
+			var x = cells[i] % rows, y = (cells[i] - x) / rows;
+			var ns = [[x-1,y],[x+1,y],[x,y-1],[x,y+1]];
+			for (var k = 0; k < 4; k++){
+				var nx = ns[k][0], ny = ns[k][1];
+				if (nx < 0 || ny < 0 || nx >= rows || ny >= cols) continue;
+				var q = ny*rows + nx;
+				if (!inT[q] && !seenB[q]){ seenB[q] = true; border.push(q); }
+			}
+		}
+		list.push({ cells: cells, border: border });
+	}
+	function R(x, y){ return [[x,y],[x+1,y],[x+2,y]]; }  // 3 across from (x,y)
+	function C(x, y){ return [[x,y],[x,y+1],[x,y+2]]; }  // 3 down from (x,y)
+	var x, y, i, line;
+	if (cond.shape == 'row') for (y = 0; y < cols; y++){
+		line = [];
+		for (x = 0; x < rows; x++) line.push([x, y]);
+		add(line);
+	}
+	else if (cond.shape == 'col') for (x = 0; x < rows; x++){
+		line = [];
+		for (y = 0; y < cols; y++) line.push([x, y]);
+		add(line);
+	}
+	else if (cond.shape == 'four' || cond.shape == 'atleast'){
+		var len = cond.shape == 'four' ? 4 : cond.size;
+		if (len <= rows) for (y = 0; y < cols; y++) for (x = 0; x + len <= rows; x++){
+			line = [];
+			for (i = 0; i < len; i++) line.push([x+i, y]);
+			add(line);
+		}
+		if (len <= cols) for (x = 0; x < rows; x++) for (y = 0; y + len <= cols; y++){
+			line = [];
+			for (i = 0; i < len; i++) line.push([x, y+i]);
+			add(line);
+		}
+		if (!list.length){ // longer than any line: just gather the colour anywhere
+			line = [];
+			for (i = 0; i < rows*cols; i++) line.push([i % rows, Math.floor(i / rows)]);
+			add(line);
+		}
+	}
+	else for (y = 0; y + 3 <= cols; y++) for (x = 0; x + 3 <= rows; x++){
+		if (cond.shape == 'cross') add(R(x, y+1).concat(C(x+1, y)));
+		else if (cond.shape == 'square') add(R(x, y).concat(R(x, y+1), R(x, y+2)));
+		else if (cond.shape == 'L') {
+			add(R(x, y).concat(C(x, y)));     add(R(x, y).concat(C(x+2, y)));
+			add(R(x, y+2).concat(C(x, y)));   add(R(x, y+2).concat(C(x+2, y)));
+		}
+		else if (cond.shape == 'T') {
+			add(R(x, y).concat(C(x+1, y)));   add(R(x, y+2).concat(C(x+1, y)));
+			add(C(x, y).concat(R(x, y+1)));   add(C(x+2, y).concat(R(x, y+1)));
+		}
+	}
+	return list;
+}
+
+// How far board b is from making the shape somewhere (0 = in place). For
+// the best placement: each empty cell of it is charged the distance to
+// the nearest spare orb of the colour, and each same-colour orb touching
+// it (which would merge in) a fixed cost. A distance — rather than just
+// counting filled cells — gives the search something to follow on every
+// move, not only on the one that drops an orb into place. The held orb
+// (at heldPos) goes wherever the cursor goes, so it's cheap to bring
+// over; any other orb only shifts one cell each time the cursor passes
+// it, so its distance costs double. Tested on random boards, that split
+// found the shape far more often than counting both the same.
+var PROGRESS_HELD_COST = 1, PROGRESS_OTHER_COST = 2, PROGRESS_BORDER_COST = 2, PROGRESS_MISSING_COST = 40;
+
+function conditionCost(b, cond, templates, heldPos){
+	if (cond.color != 'any') return conditionCostForColor(b, cond.color, templates, heldPos);
+	var best = Infinity;
+	for (var i = 0; i < CONDITION_COLORS.length; i++){
+		if (CONDITION_COLORS[i][0] == 'any') continue;
+		best = Math.min(best, conditionCostForColor(b, CONDITION_COLORS[i][0], templates, heldPos));
+	}
+	return best;
+}
+
+function conditionCostForColor(b, color, templates, heldPos){
+	var best = Infinity;
+	for (var t = 0; t < templates.length; t++){
+		var tpl = templates[t], inT = {}, spare = [], used = [], cost = 0, i, k;
+		for (i = 0; i < tpl.cells.length; i++) inT[tpl.cells[i]] = true;
+		for (i = 0; i < b.length; i++) if (b[i] === color && !inT[i]) spare.push(i);
+		for (i = 0; i < tpl.cells.length && cost < best; i++){
+			var p = tpl.cells[i];
+			if (b[p] === color) continue;
+			var px = p % rows, py = (p - px) / rows, nearest = -1, nearestCost = Infinity;
+			for (k = 0; k < spare.length; k++){
+				if (used[k]) continue;
+				var q = spare[k], qx = q % rows, qy = (q - qx) / rows;
+				var d = (Math.abs(px - qx) + Math.abs(py - qy)) * (q === heldPos ? PROGRESS_HELD_COST : PROGRESS_OTHER_COST);
+				if (d < nearestCost){ nearestCost = d; nearest = k; }
+			}
+			if (nearest < 0) cost += PROGRESS_MISSING_COST;
+			else { used[nearest] = true; cost += nearestCost; }
+		}
+		for (i = 0; i < tpl.border.length; i++) if (b[tpl.border[i]] === color) cost += PROGRESS_BORDER_COST;
+		if (cost < best) best = cost;
+	}
+	return best;
+}
+
+// Best combo count a route could reach while also making the conditions'
+// shapes (each shape uses up its orbs as one combo). Only used to stop the
+// search early once reached, so a rough upper bound is fine.
+function conditionComboTarget(b, conds){
+	var counts = {}, need = minimumMatches + 1, total = 0, i;
+	for (i = 0; i < b.length; i++){
+		if (!b[i] || b[i] === 'black') continue;
+		counts[b[i]] = (counts[b[i]] || 0) + 1;
+	}
+	for (i = 0; i < conds.length; i++){
+		var cd = conds[i];
+		if (cd.color == 'any' || !counts[cd.color]) continue;
+		var used = Math.min(counts[cd.color], conditionOrbCount(cd) * cd.count);
+		counts[cd.color] -= used;
+		total += Math.floor(used / conditionOrbCount(cd));
+	}
+	for (var k in counts) total += Math.floor(counts[k] / need);
+	return total;
+}
+
+// Colours the board doesn't have enough of for the conditions, e.g.
+// ["火 (必要10 / 盤面7)"]. A rough check (conditions could share a group).
+function conditionShortages(b, conds){
+	var have = {}, want = {}, out = [], i;
+	for (i = 0; i < b.length; i++) if (b[i]) have[b[i]] = (have[b[i]] || 0) + 1;
+	for (i = 0; i < conds.length; i++){
+		if (conds[i].color == 'any') continue;
+		want[conds[i].color] = (want[conds[i].color] || 0) + conditionOrbCount(conds[i]) * conds[i].count;
+	}
+	for (var c in want) if (want[c] > (have[c] || 0)) out.push(conditionColorLabel(c) + ' (必要' + want[c] + ' / 盤面' + (have[c] || 0) + ')');
+	return out;
+}
+
+function loadAnalysisConditions(){
+	try {
+		var saved = JSON.parse(localStorage.getItem(CONDITIONS_KEY));
+		if (saved && saved.conds) {
+			analysisConditions = saved.conds.filter(function(c){ return CLEAR_SHAPES[c.shape]; });
+			analysisObjective = saved.objective == 'shortest' ? 'shortest' : 'maxcombo';
+		}
+	} catch (e) {}
+}
+
+function saveAnalysisConditions(){
+	try { localStorage.setItem(CONDITIONS_KEY, JSON.stringify({ conds: analysisConditions, objective: analysisObjective })); } catch (e) {}
+}
+
+function renderAnalysisConditions(){
+	var list = document.getElementById('condList');
+	if (!list) return;
+	var html = '', i, k;
+	for (i = 0; i < analysisConditions.length; i++){
+		var cd = analysisConditions[i];
+		html += '<div class="condRow">'
+			+ '<select onchange="updateAnalysisCondition(' + i + ', \'color\', this.value)">';
+		for (k = 0; k < CONDITION_COLORS.length; k++)
+			html += '<option value="' + CONDITION_COLORS[k][0] + '"' + (cd.color == CONDITION_COLORS[k][0] ? ' selected' : '') + '>' + CONDITION_COLORS[k][1] + '</option>';
+		html += '</select><select onchange="updateAnalysisCondition(' + i + ', \'shape\', this.value)">';
+		for (var sh in CLEAR_SHAPES)
+			html += '<option value="' + sh + '"' + (cd.shape == sh ? ' selected' : '') + '>' + CLEAR_SHAPES[sh].label + '</option>';
+		html += '</select>';
+		if (cd.shape == 'atleast')
+			html += '<input type="number" class="condNum" min="3" max="' + rows*cols + '" value="' + cd.size + '" onchange="updateAnalysisCondition(' + i + ', \'size\', this.value)">個以上';
+		html += ' ×<input type="number" class="condNum" min="1" max="9" value="' + cd.count + '" onchange="updateAnalysisCondition(' + i + ', \'count\', this.value)">'
+			+ '<label class="condCascade"><input type="checkbox"' + (cd.cascade ? ' checked' : '') + ' onchange="updateAnalysisCondition(' + i + ', \'cascade\', this.checked)">連鎖も可</label>'
+			+ '<button class="condRemove" onclick="updateAnalysisCondition(' + i + ', \'remove\')" title="削除">✕</button>'
+			+ '</div>';
+	}
+	list.innerHTML = html;
+	document.getElementById('analyzeObjective').style.display = analysisConditions.length ? '' : 'none';
+	document.getElementById('objMaxBtn').classList.toggle('modebutton-active', analysisObjective == 'maxcombo');
+	document.getElementById('objShortBtn').classList.toggle('modebutton-active', analysisObjective == 'shortest');
+}
+
+function addAnalysisCondition(){
+	analysisConditions.push({ shape: 'cross', color: 'red', count: 1, size: 5, cascade: CLEAR_SHAPES.cross.cascade });
+	saveAnalysisConditions();
+	renderAnalysisConditions();
+}
+
+function updateAnalysisCondition(index, field, value){
+	var cd = analysisConditions[index];
+	if (!cd) return;
+	if (field == 'remove') analysisConditions.splice(index, 1);
+	else if (field == 'shape') { cd.shape = value; cd.cascade = CLEAR_SHAPES[value].cascade; }
+	else if (field == 'count') cd.count = Math.max(1, Math.min(9, parseInt(value) || 1));
+	else if (field == 'size') cd.size = Math.max(3, Math.min(rows*cols, parseInt(value) || 5));
+	else cd[field] = value;
+	saveAnalysisConditions();
+	renderAnalysisConditions();
+}
+
 function setAnalyzeStatus(text){
 	var el = document.getElementById('analyzeStatus');
 	if (el) el.textContent = text;
@@ -970,12 +1283,59 @@ function runAnalysis(){
 	var base = boardArrayFromDivs();
 	var levelParams = ANALYSIS_LEVELS[analysisLevel] || ANALYSIS_LEVELS.fast;
 	var maxDepth = levelParams.depth, beamWidth = levelParams.beam, extraDepthAfterBest = levelParams.extraDepthAfterBest;
-	var target = maxPossibleCombosFromCounts(base);
-	var best = 0, bestFoundDepth = -1;
-	// Solutions are kept per combo count (best tier and one below) so the
-	// results can list several near-optimal routes, not just the single
-	// best path the beam happened to keep.
-	var solutionsByCombo = {};
+	var conds = analysisConditions.map(function(c){
+		return { shape: c.shape, color: c.color, count: c.count, size: c.size, cascade: c.cascade };
+	});
+	var objective = conds.length ? analysisObjective : 'maxcombo';
+	var totalNeed = 0;
+	for (var ci = 0; ci < conds.length; ci++){
+		conds[ci].templates = buildShapeTemplates(conds[ci]);
+		totalNeed += conds[ci].count;
+	}
+	var target = conds.length ? conditionComboTarget(base, conds) : maxPossibleCombosFromCounts(base);
+	var shortages = conditionShortages(base, conds);
+
+	// Scores the board a move leaves (cursor at heldPos): conditions met
+	// first, then how close the unmet ones are (so the beam can find shapes
+	// that score nothing until complete), then combos, then same-colour
+	// adjacency.
+	function evaluate(nb, heldPos){
+		var found = [], i;
+		for (i = 0; i < conds.length; i++) found.push(0);
+		var combos = simulateCascade(nb.slice(), conds.length ? function(color, cells, stage){
+			var shapes = null;
+			for (var j = 0; j < conds.length; j++){
+				var cd = conds[j];
+				if (stage > 0 && !cd.cascade) continue;
+				if (cd.color != 'any' && cd.color !== color) continue;
+				shapes = shapes || groupShapes(cells);
+				if (groupMatchesCondition(cd, shapes)) found[j]++;
+			}
+		} : null);
+		var met = 0, cost = 0;
+		for (i = 0; i < conds.length; i++){
+			met += Math.min(found[i], conds[i].count);
+			if (found[i] < conds[i].count) cost += conditionCost(nb, conds[i], conds[i].templates, heldPos);
+		}
+		return { combos: combos, found: found, met: met, score: met*1000000 - cost*1000 + combos*100 + countAdjacentPairs(nb) };
+	}
+
+	// Result ranking: most conditions met first; then most combos
+	// (maxcombo) or fewest moves (shortest).
+	function better(a, b2){
+		if (a.met != b2.met) return b2.met - a.met;
+		if (objective == 'shortest') {
+			if (a.path.length != b2.path.length) return a.path.length - b2.path.length;
+			return b2.combos - a.combos;
+		}
+		if (a.combos != b2.combos) return b2.combos - a.combos;
+		return a.path.length - b2.path.length;
+	}
+
+	var bestMet = 0, bestCombos = 0, bestFoundDepth = -1;
+	// Candidate results; routes meeting fewer conditions are kept too, so
+	// the closest routes can be shown when none meets them all.
+	var pool = [];
 	var beam = [];
 	for (var s = 0; s < rows*cols; s++) beam.push({ board: base, pos: s, path: [s] });
 	var depth = 0;
@@ -1003,58 +1363,55 @@ function runAnalysis(){
 				var key = nb.join('|') + '#' + np;
 				if (seen[key]) continue;
 				seen[key] = true;
-				var combos = simulateCascade(nb.slice());
+				var ev = evaluate(nb, np);
 				var npath = st.path.concat([np]);
-				candidates.push({ board: nb, pos: np, path: npath, score: combos*1000 + countAdjacentPairs(nb) });
-				if (combos > 0 && combos >= best - 1){
-					if (combos > best){
-						best = combos;
+				candidates.push({ board: nb, pos: np, path: npath, score: ev.score });
+				if (ev.combos > 0 || ev.met > 0){
+					if (ev.met > bestMet || (ev.met == bestMet && ev.combos > bestCombos)){
+						bestMet = ev.met;
+						bestCombos = ev.combos;
 						bestFoundDepth = depth;
-						for (var oldTier in solutionsByCombo){
-							if (parseInt(oldTier) < best - 1) delete solutionsByCombo[oldTier];
-						}
 					}
-					var tierArr = solutionsByCombo[combos] = solutionsByCombo[combos] || [];
-					if (tierArr.length < 60) tierArr.push(npath);
+					if (ev.met >= bestMet - 1) pool.push({ path: npath, combos: ev.combos, met: ev.met, found: ev.found });
 				}
 			}
 		}
+		if (pool.length > 600) { pool.sort(better); pool = pool.slice(0, 300); }
 		candidates.sort(function(a, b2){ return b2.score - a.score; });
 		beam = candidates.slice(0, beamWidth);
-		setAnalyzeStatus('解析中... ' + depth + '/' + maxDepth + '手 (現時点の最大: ' + best + 'コンボ)');
-		var doneByTarget = (best >= target && bestFoundDepth > -1 && depth >= bestFoundDepth + extraDepthAfterBest);
-		if (doneByTarget || depth >= maxDepth || beam.length === 0) finish();
+		setAnalyzeStatus('解析中... ' + depth + '/' + maxDepth + '手 ('
+			+ (conds.length ? '条件 ' + bestMet + '/' + totalNeed + '・' : '') + '現時点の最大: ' + bestCombos + 'コンボ)');
+		var allMet = (bestMet >= totalNeed && bestFoundDepth > -1);
+		var done;
+		if (objective == 'shortest') done = allMet; // every route of this length has just been looked at
+		else done = allMet && bestCombos >= target && depth >= bestFoundDepth + extraDepthAfterBest;
+		if (done || depth >= maxDepth || beam.length === 0) finish();
 		else setTimeout(step, 0);
 	}
 
 	function finish(){
 		analysisRunning = false;
-		// Best-combo routes first (shortest first), then one combo fewer
-		// as extra alternatives if there is room left.
-		var tiers = Object.keys(solutionsByCombo).map(Number).sort(function(a, b2){ return b2 - a; });
+		pool.sort(better);
 		var seenPaths = {}, finals = [];
-		for (var t = 0; t < tiers.length && finals.length < 5; t++){
-			var tierPaths = solutionsByCombo[tiers[t]].slice();
-			tierPaths.sort(function(a, b2){ return a.length - b2.length; });
-			for (var i = 0; i < tierPaths.length && finals.length < 5; i++){
-				var k = tierPaths[i].join(',');
-				if (seenPaths[k]) continue;
-				seenPaths[k] = true;
-				finals.push({ path: tierPaths[i], combos: tiers[t] });
-			}
+		for (var i = 0; i < pool.length && finals.length < 5; i++){
+			var k = pool[i].path.join(',');
+			if (seenPaths[k]) continue;
+			seenPaths[k] = true;
+			finals.push(pool[i]);
 		}
 		analysisSolutions = finals;
-		renderAnalysisResults(best, target);
+		renderAnalysisResults({ conds: conds, totalNeed: totalNeed, bestMet: bestMet, bestCombos: bestCombos, target: target, shortages: shortages });
 	}
 
 	setTimeout(step, 0);
 }
 
-function renderAnalysisResults(best, target){
+function renderAnalysisResults(info){
 	var container = document.getElementById('analyzeResults');
+	var conds = info.conds;
 	if (!analysisSolutions.length){
 		container.innerHTML = '<div>ルートが見つかりませんでした</div>';
-		setAnalyzeStatus('');
+		setAnalyzeStatus(info.shortages.length ? 'ドロップが足りません: ' + info.shortages.join('、') : '');
 		return;
 	}
 	var html = '';
@@ -1062,10 +1419,25 @@ function renderAnalysisResults(best, target){
 		var s = analysisSolutions[i];
 		html += '<div class="analyzeItem">' + (i+1) + '. ' + s.combos + 'コンボ / ' + (s.path.length-1) + '手'
 			+ ' <button onclick="requestAction(\'showsolution\', ' + i + ')">ルート表示</button>'
-			+ ' <button onclick="requestAction(\'playsolution\', ' + i + ')">再生</button></div>';
+			+ ' <button onclick="requestAction(\'playsolution\', ' + i + ')">再生</button>';
+		if (conds.length) {
+			html += '<div class="condResult">';
+			for (var j = 0; j < conds.length; j++){
+				var ok = s.found[j] >= conds[j].count;
+				html += '<span class="' + (ok ? 'condOk' : 'condNg') + '">' + (ok ? '✓' : '✗') + escapeHtml(conditionLabel(conds[j]))
+					+ (conds[j].count > 1 ? ' ' + Math.min(s.found[j], conds[j].count) + '/' + conds[j].count : '') + '</span>';
+			}
+			html += '</div>';
+		}
+		html += '</div>';
 	}
 	container.innerHTML = html;
-	setAnalyzeStatus('解析完了: 最大' + best + 'コンボ (盤面の理論値 ' + target + 'コンボ)');
+	var status;
+	if (!conds.length) status = '解析完了: 最大' + info.bestCombos + 'コンボ (盤面の理論値 ' + info.target + 'コンボ)';
+	else if (info.bestMet >= info.totalNeed) status = '解析完了: 条件をすべて満たしました (' + info.bestCombos + 'コンボ)';
+	else status = '条件をすべて満たすルートは見つかりませんでした。近いルートを表示します (条件 ' + info.bestMet + '/' + info.totalNeed + ')'
+		+ (info.shortages.length ? ' — ドロップ不足: ' + info.shortages.join('、') : '');
+	setAnalyzeStatus(status);
 	requestAction('showsolution', 0);
 }
 
@@ -1943,6 +2315,12 @@ function requestAction(action, modifier){ // CLEAN IT UP
 		document.getElementById('levelNormalBtn').classList.toggle('modebutton-active', modifier == 'normal');
 		document.getElementById('levelDeepBtn').classList.toggle('modebutton-active', modifier == 'deep');
 	}
+	if (action == 'addcond') addAnalysisCondition();
+	if (action == 'analyzeobjective') {
+		analysisObjective = modifier;
+		saveAnalysisConditions();
+		renderAnalysisConditions();
+	}
 	if (action == 'showsolution') showAnalysisSolution(modifier);
 	if (action == 'playsolution') {
 		var solToPlay = analysisSolutions[modifier];
@@ -2058,6 +2436,8 @@ $(function(){		// CURSOR AT AND MOVING ORB SIZE
 	saveBoardState();
 	clearMemory('score');
 	renderLibrary();
+	loadAnalysisConditions();
+	renderAnalysisConditions();
 	// A reload while the picker was open leaves #saved behind; start on
 	// the board instead.
 	if (location.hash == '#saved') history.replaceState(null, '', location.pathname + location.search);

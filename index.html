@@ -13,10 +13,10 @@
 	<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
 	<script src="https://code.jquery.com/jquery-1.11.3.min.js"></script>
 	<script src="https://code.jquery.com/ui/1.11.3/jquery-ui.min.js"></script>
-	<link rel="stylesheet" type="text/css" href="pad.css?v14">
+	<link rel="stylesheet" type="text/css" href="pad.css?v15">
 	<link rel="stylesheet" type="text/css" href="menu.css?v4">
 	<link rel="shortcut icon" href="favicon.ico" />
-	<script src="pad.js?v17"></script>
+	<script src="pad.js?v20"></script>
 </head>
 <body><div id="wrapwrap">
 	<div id="lineback">
@@ -46,6 +46,15 @@
 				<button onclick="requestAction('analyzelevel', 'fast')" id="levelFastBtn" class="modebutton modebutton-active">速い(25手)</button>
 				<button onclick="requestAction('analyzelevel', 'normal')" id="levelNormalBtn" class="modebutton">標準(35手)</button>
 				<button onclick="requestAction('analyzelevel', 'deep')" id="levelDeepBtn" class="modebutton">詳細(50手)</button>
+			</div>
+			<div id="analyzeConds">
+				<div id="condList"></div>
+				<button onclick="requestAction('addcond')" class="modebutton" id="addCondBtn">＋ 消し方の条件を追加</button>
+				<div id="analyzeObjective" style="display:none">
+					目的:
+					<button onclick="requestAction('analyzeobjective', 'maxcombo')" id="objMaxBtn" class="modebutton modebutton-active">条件＋盤面最大</button>
+					<button onclick="requestAction('analyzeobjective', 'shortest')" id="objShortBtn" class="modebutton">条件のみ(最短)</button>
+				</div>
 			</div>
 			<button onclick="requestAction('analyze')" class="modebutton">解析開始</button>
 			<div id="analyzeStatus"></div>

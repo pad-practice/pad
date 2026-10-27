@@ -603,6 +603,62 @@ border:1px solid #616261; -webkit-border-radius: 3px; -moz-border-radius: 3px;bo
 .analyzeItem {
 	padding:3px 0;
 }
+#analyzeConds {
+	margin-bottom:8px;
+}
+.condRow {
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	flex-wrap:wrap;
+	gap:4px;
+	margin-bottom:4px;
+}
+.condRow select, .condNum {
+	border:1px solid var(--panel-border);
+	background:var(--panel-bg-2);
+	color:var(--text);
+	border-radius:6px;
+	padding:3px 4px;
+	font-size:14px;
+}
+.condNum {
+	width:3em;
+}
+.condCascade {
+	color:var(--text-muted);
+	font-size:12px;
+	white-space:nowrap;
+}
+.condCascade input {
+	vertical-align:middle;
+	margin-right:2px;
+}
+.condRemove {
+	border:1px solid var(--panel-border);
+	background:var(--panel-bg-2);
+	color:var(--text);
+	border-radius:6px;
+	padding:2px 8px;
+	cursor:pointer;
+}
+#analyzeObjective {
+	margin-top:6px;
+}
+.condResult {
+	font-size:12px;
+	padding-left:1.2em;
+}
+.condResult span {
+	margin-right:8px;
+	white-space:nowrap;
+}
+.condOk {
+	color:#4cd97b;
+}
+.condNg {
+	color:#ff7a7a;
+}
 .analyzeItem button {
 	border:1px solid var(--panel-border);
 	background:var(--panel-bg-2);
