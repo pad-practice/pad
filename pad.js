@@ -846,10 +846,12 @@ var analysisLevel = 'fast';
 // time for accuracy (roughly 2-3s / 7s / 12s on a mid-range device).
 // The search is chunked per depth so the page stays responsive even at
 // the higher settings.
+// With conditions, `layouts` finished layouts are tried (see
+// buildConditionLayouts), each searched with a beam of `layoutBeam`.
 var ANALYSIS_LEVELS = {
-	fast:   { depth: 25, beam: 2200, extraDepthAfterBest: 3 },
-	normal: { depth: 35, beam: 4200, extraDepthAfterBest: 5 },
-	deep:   { depth: 50, beam: 4500, extraDepthAfterBest: 8 }
+	fast:   { depth: 25, beam: 2200, extraDepthAfterBest: 3, layouts: 8,  layoutBeam: 1000 },
+	normal: { depth: 35, beam: 4200, extraDepthAfterBest: 5, layouts: 20, layoutBeam: 1500 },
+	deep:   { depth: 50, beam: 4500, extraDepthAfterBest: 8, layouts: 40, layoutBeam: 2500 }
 };
 
 function boardArrayFromDivs(){
@@ -1275,6 +1277,114 @@ function setAnalyzeStatus(text){
 	if (el) el.textContent = text;
 }
 
+// ---- 完成形 (finished layouts) for condition searches ----
+//
+// Scoring each condition against whichever placement suits it best right
+// now (conditionCost) works for one shape, but with several the targets
+// keep shifting from move to move and can even overlap, so the search
+// wanders. Instead, a handful of finished layouts are picked up front —
+// one placement per shape, none overlapping, no same-coloured shapes
+// touching — and each is searched for separately with a fixed target.
+// On test boards this found routes for 3+ shapes the old scoring missed
+// entirely, and cut a 44-move route for four T shapes plus a column to 30.
+
+// How far board b is from layout `lay` (0 = every cell in place): each
+// target cell not yet holding its colour is charged the distance to the
+// nearest unused spare orb of that colour (the held orb, at heldPos,
+// cheaper — see conditionCostForColor), and each border cell of an exact
+// shape holding that shape's colour a fixed cost.
+function layoutCost(b, lay, heldPos){
+	var cost = 0, i, k;
+	for (var color in lay.need){
+		var cells = lay.need[color], spare = [], used = [];
+		for (i = 0; i < b.length; i++) if (b[i] === color && lay.owner[i] !== color) spare.push(i);
+		for (i = 0; i < cells.length; i++){
+			var p = cells[i];
+			if (b[p] === color) continue;
+			var px = p % rows, py = (p - px) / rows, nearest = -1, nearestCost = Infinity;
+			for (k = 0; k < spare.length; k++){
+				if (used[k]) continue;
+				var q = spare[k], qx = q % rows, qy = (q - qx) / rows;
+				var d = (Math.abs(px - qx) + Math.abs(py - qy)) * (q === heldPos ? PROGRESS_HELD_COST : PROGRESS_OTHER_COST);
+				if (d < nearestCost){ nearestCost = d; nearest = k; }
+			}
+			if (nearest < 0) cost += PROGRESS_MISSING_COST;
+			else { used[nearest] = true; cost += nearestCost; }
+		}
+	}
+	for (i = 0; i < lay.border.length; i++) if (b[lay.border[i][0]] === lay.border[i][1]) cost += PROGRESS_BORDER_COST;
+	return cost;
+}
+
+// The `maxLayouts` cheapest finished layouts for `conds` on board `base`,
+// cheapest (closest to the current board) first. A condition with count n
+// takes n placements. The enumeration is capped so it stays quick even
+// with many small shapes on a big board.
+function buildConditionLayouts(base, conds, maxLayouts){
+	var PER_SHAPE = 48, MAX_VISITS = 300000;
+	var inst = [], i;
+	for (i = 0; i < conds.length; i++) for (var n = 0; n < conds[i].count; n++) inst.push(conds[i]);
+	var have = {};
+	for (i = 0; i < base.length; i++) if (base[i]) have[base[i]] = (have[base[i]] || 0) + 1;
+	var options = inst.map(function(cd){
+		var exact = !(cd.shape == 'row' || cd.shape == 'col' || cd.shape == 'atleast');
+		var colors = cd.color == 'any'
+			? CONDITION_COLORS.map(function(c){ return c[0]; }).filter(function(c){ return c != 'any'; })
+			: [cd.color];
+		var list = [];
+		for (var t = 0; t < cd.templates.length; t++) for (var c = 0; c < colors.length; c++){
+			var tpl = cd.templates[t], color = colors[c];
+			if ((have[color] || 0) < tpl.cells.length) continue;
+			var solo = { need: {}, owner: {}, border: [] };
+			solo.need[color] = tpl.cells;
+			for (var j = 0; j < tpl.cells.length; j++) solo.owner[tpl.cells[j]] = color;
+			if (exact) solo.border = tpl.border.map(function(p){ return [p, color]; });
+			list.push({ cells: tpl.cells, border: solo.border, color: color, solo: layoutCost(base, solo, -1) });
+		}
+		list.sort(function(a, b){ return a.solo - b.solo; });
+		return list.slice(0, PER_SHAPE);
+	});
+	var results = [], owner = {}, borders = [], visits = 0;
+	function trim(){
+		results.sort(function(a, b){ return a.cost - b.cost; });
+		results.length = Math.min(results.length, maxLayouts);
+	}
+	function rec(idx){
+		if (++visits > MAX_VISITS) return;
+		if (idx == inst.length){
+			var lay = { need: {}, owner: {}, border: [] }, p;
+			for (p in owner){
+				lay.owner[p] = owner[p];
+				(lay.need[owner[p]] = lay.need[owner[p]] || []).push(+p);
+			}
+			for (var b = 0; b < borders.length; b++){
+				var bp = borders[b][0], bc = borders[b][1];
+				if (owner[bp] === bc) return; // a same-coloured shape would merge into this one
+				if (owner[bp] === undefined) lay.border.push(borders[b]);
+			}
+			for (var color in lay.need) if (lay.need[color].length > (have[color] || 0)) return;
+			lay.cost = layoutCost(base, lay, -1);
+			results.push(lay);
+			if (results.length > maxLayouts * 20) trim();
+			return;
+		}
+		var opts = options[idx];
+		for (var o = 0; o < opts.length; o++){
+			var op = opts[o], clash = false, k;
+			for (k = 0; k < op.cells.length; k++) if (owner[op.cells[k]] !== undefined){ clash = true; break; }
+			if (clash) continue;
+			for (k = 0; k < op.cells.length; k++) owner[op.cells[k]] = op.color;
+			for (k = 0; k < op.border.length; k++) borders.push(op.border[k]);
+			rec(idx + 1);
+			borders.length -= op.border.length;
+			for (k = 0; k < op.cells.length; k++) delete owner[op.cells[k]];
+		}
+	}
+	rec(0);
+	trim();
+	return results;
+}
+
 function runAnalysis(){
 	if (analysisRunning) return;
 	analysisRunning = true;
@@ -1282,7 +1392,7 @@ function runAnalysis(){
 	clearMemory('arrows');
 	var base = boardArrayFromDivs();
 	var levelParams = ANALYSIS_LEVELS[analysisLevel] || ANALYSIS_LEVELS.fast;
-	var maxDepth = levelParams.depth, beamWidth = levelParams.beam, extraDepthAfterBest = levelParams.extraDepthAfterBest;
+	var maxDepth = levelParams.depth, extraDepthAfterBest = levelParams.extraDepthAfterBest;
 	var conds = analysisConditions.map(function(c){
 		return { shape: c.shape, color: c.color, count: c.count, size: c.size, cascade: c.cascade };
 	});
@@ -1295,11 +1405,8 @@ function runAnalysis(){
 	var target = conds.length ? conditionComboTarget(base, conds) : maxPossibleCombosFromCounts(base);
 	var shortages = conditionShortages(base, conds);
 
-	// Scores the board a move leaves (cursor at heldPos): conditions met
-	// first, then how close the unmet ones are (so the beam can find shapes
-	// that score nothing until complete), then combos, then same-colour
-	// adjacency.
-	function evaluate(nb, heldPos){
+	// Which conditions the board a move leaves meets, and its combos.
+	function checkConditions(nb){
 		var found = [], i;
 		for (i = 0; i < conds.length; i++) found.push(0);
 		var combos = simulateCascade(nb.slice(), conds.length ? function(color, cells, stage){
@@ -1312,12 +1419,9 @@ function runAnalysis(){
 				if (groupMatchesCondition(cd, shapes)) found[j]++;
 			}
 		} : null);
-		var met = 0, cost = 0;
-		for (i = 0; i < conds.length; i++){
-			met += Math.min(found[i], conds[i].count);
-			if (found[i] < conds[i].count) cost += conditionCost(nb, conds[i], conds[i].templates, heldPos);
-		}
-		return { combos: combos, found: found, met: met, score: met*1000000 - cost*1000 + combos*100 + countAdjacentPairs(nb) };
+		var met = 0;
+		for (i = 0; i < conds.length; i++) met += Math.min(found[i], conds[i].count);
+		return { combos: combos, found: found, met: met };
 	}
 
 	// Result ranking: most conditions met first; then most combos
@@ -1332,20 +1436,26 @@ function runAnalysis(){
 		return a.path.length - b2.path.length;
 	}
 
-	var bestMet = 0, bestCombos = 0, bestFoundDepth = -1;
 	// Candidate results; routes meeting fewer conditions are kept too, so
 	// the closest routes can be shown when none meets them all.
+	var bestMet = 0, bestCombos = 0, bestFoundDepth = -1, fullDepth = -1;
 	var pool = [];
-	var beam = [];
-	for (var s = 0; s < rows*cols; s++) beam.push({ board: base, pos: s, path: [s] });
-	var depth = 0;
-	document.getElementById('analyzeResults').innerHTML = '';
-	setAnalyzeStatus('解析中... 0/' + maxDepth + '手');
+	function record(ck, path, depth){
+		if (!(ck.combos > 0 || ck.met > 0)) return;
+		if (ck.met > bestMet || (ck.met == bestMet && ck.combos > bestCombos)){
+			bestMet = ck.met;
+			bestCombos = ck.combos;
+			bestFoundDepth = depth;
+		}
+		if (ck.met >= totalNeed && (fullDepth < 0 || depth < fullDepth)) fullDepth = depth;
+		if (ck.met >= bestMet - 1) pool.push({ path: path, combos: ck.combos, met: ck.met, found: ck.found });
+		if (pool.length > 600) { pool.sort(better); pool = pool.slice(0, 300); }
+	}
 
-	function step(){
-		depth++;
-		var candidates = [];
-		var seen = {};
+	// One beam step: every non-backtracking cursor move from each state,
+	// deduplicated, scored by scoreFn(board, cursor, check) and recorded.
+	function expand(beam, depth, scoreFn){
+		var candidates = [], seen = {};
 		for (var bi = 0; bi < beam.length; bi++){
 			var st = beam[bi];
 			var px = st.pos % rows, py = (st.pos - px) / rows;
@@ -1363,30 +1473,78 @@ function runAnalysis(){
 				var key = nb.join('|') + '#' + np;
 				if (seen[key]) continue;
 				seen[key] = true;
-				var ev = evaluate(nb, np);
+				var ck = checkConditions(nb);
 				var npath = st.path.concat([np]);
-				candidates.push({ board: nb, pos: np, path: npath, score: ev.score });
-				if (ev.combos > 0 || ev.met > 0){
-					if (ev.met > bestMet || (ev.met == bestMet && ev.combos > bestCombos)){
-						bestMet = ev.met;
-						bestCombos = ev.combos;
-						bestFoundDepth = depth;
-					}
-					if (ev.met >= bestMet - 1) pool.push({ path: npath, combos: ev.combos, met: ev.met, found: ev.found });
-				}
+				record(ck, npath, depth);
+				candidates.push({ board: nb, pos: np, path: npath, met: ck.met, score: scoreFn(nb, np, ck) });
 			}
 		}
-		if (pool.length > 600) { pool.sort(better); pool = pool.slice(0, 300); }
 		candidates.sort(function(a, b2){ return b2.score - a.score; });
-		beam = candidates.slice(0, beamWidth);
-		setAnalyzeStatus('解析中... ' + depth + '/' + maxDepth + '手 ('
-			+ (conds.length ? '条件 ' + bestMet + '/' + totalNeed + '・' : '') + '現時点の最大: ' + bestCombos + 'コンボ)');
-		var allMet = (bestMet >= totalNeed && bestFoundDepth > -1);
-		var done;
-		if (objective == 'shortest') done = allMet; // every route of this length has just been looked at
-		else done = allMet && bestCombos >= target && depth >= bestFoundDepth + extraDepthAfterBest;
-		if (done || depth >= maxDepth || beam.length === 0) finish();
-		else setTimeout(step, 0);
+		return candidates;
+	}
+
+	function startBeam(){
+		var beam = [];
+		for (var s = 0; s < rows*cols; s++) beam.push({ board: base, pos: s, path: [s] });
+		return beam;
+	}
+
+	function conditionStatus(){
+		return conds.length ? '条件 ' + bestMet + '/' + totalNeed + '・' : '';
+	}
+
+	document.getElementById('analyzeResults').innerHTML = '';
+	setAnalyzeStatus('解析中...');
+
+	// Phase 1 (conditions only): search toward each finished layout in turn.
+	var layouts = conds.length ? buildConditionLayouts(base, conds, levelParams.layouts) : [];
+	var li = 0, lBeam = null, lDepth = 0;
+	function layoutStep(){
+		if (li >= layouts.length) return classicOrFinish();
+		var lay = layouts[li];
+		if (!lBeam) { lBeam = startBeam(); lDepth = 0; }
+		// Past the shortest full route found so far there's nothing to gain
+		// for "shortest"; for "maxcombo" a few extra moves may add combos.
+		var limit = fullDepth < 0 ? maxDepth : (objective == 'shortest' ? fullDepth - 1 : Math.min(maxDepth, fullDepth + extraDepthAfterBest));
+		lDepth++;
+		var metThisDepth = false;
+		var cand = lDepth > limit ? [] : expand(lBeam, lDepth, function(nb, np, ck){
+			if (ck.met >= totalNeed) metThisDepth = true;
+			return (ck.met >= totalNeed ? 1000000 : 0) - layoutCost(nb, lay, np)*1000 + ck.combos*100 + countAdjacentPairs(nb);
+		});
+		lBeam = cand.slice(0, levelParams.layoutBeam);
+		setAnalyzeStatus('解析中... 完成形 ' + (li+1) + '/' + layouts.length + '・' + lDepth + '手 ('
+			+ conditionStatus() + (fullDepth > 0 ? '最短 ' + fullDepth + '手・' : '') + '最大 ' + bestCombos + 'コンボ)');
+		if (!lBeam.length || lDepth >= limit || (objective == 'shortest' && metThisDepth)) { li++; lBeam = null; }
+		setTimeout(layoutStep, 0);
+	}
+
+	// Phase 2: the original beam (scored by conditionCost) — the whole
+	// search when there are no conditions. With conditions it still runs:
+	// on some boards it finds a shorter route than any layout gives, and
+	// when no layout leads to a full route it finds the closest ones.
+	function classicOrFinish(){
+		var beam = startBeam(), depth = 0;
+		function step(){
+			depth++;
+			var cand = expand(beam, depth, function(nb, np, ck){
+				var cost = 0;
+				for (var i = 0; i < conds.length; i++)
+					if (ck.found[i] < conds[i].count) cost += conditionCost(nb, conds[i], conds[i].templates, np);
+				return ck.met*1000000 - cost*1000 + ck.combos*100 + countAdjacentPairs(nb);
+			});
+			beam = cand.slice(0, levelParams.beam);
+			setAnalyzeStatus('解析中... ' + depth + '/' + maxDepth + '手 (' + conditionStatus() + '現時点の最大: ' + bestCombos + 'コンボ)');
+			var allMet = (bestMet >= totalNeed && bestFoundDepth > -1);
+			var done;
+			// for "shortest", once every route one move shorter than the best
+			// full route has been looked at, nothing shorter is left to find
+			if (objective == 'shortest') done = conds.length ? (fullDepth > 0 && depth >= fullDepth - 1) : allMet;
+			else done = allMet && bestCombos >= target && depth >= bestFoundDepth + extraDepthAfterBest;
+			if (done || depth >= maxDepth || beam.length === 0) finish();
+			else setTimeout(step, 0);
+		}
+		setTimeout(step, 0);
 	}
 
 	function finish(){
@@ -1403,7 +1561,7 @@ function runAnalysis(){
 		renderAnalysisResults({ conds: conds, totalNeed: totalNeed, bestMet: bestMet, bestCombos: bestCombos, target: target, shortages: shortages });
 	}
 
-	setTimeout(step, 0);
+	setTimeout(layoutStep, 0);
 }
 
 function renderAnalysisResults(info){
