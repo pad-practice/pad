@@ -1385,6 +1385,152 @@ function buildConditionLayouts(base, conds, maxLayouts){
 	return results;
 }
 
+// Finished layouts that use a cascade: some shapes clear on the move
+// itself (stage 0) and the rest only line up once the orbs above have
+// fallen into the gap (stage 1). Only conditions allowing cascades (連鎖も可)
+// can be in the second group. The stage-1 shapes are placed on the
+// board as it looks after the fall, then traced back up each column to
+// where their orbs must sit before the move ends. Layouts are rejected
+// when a stage-1 orb would already clear on stage 0 or same-coloured
+// shapes would touch. Without these, a route like the one that builds
+// two of its four T shapes on the cascade (27 moves) is out of reach:
+// the best the stage-0-only layouts could do was 30.
+function buildCascadeLayouts(base, conds, maxLayouts){
+	var PER_SHAPE = 24, MAX_VISITS = 200000;
+	var inst = [], i;
+	for (i = 0; i < conds.length; i++) for (var n = 0; n < conds[i].count; n++) inst.push(conds[i]);
+	var have = {};
+	for (i = 0; i < base.length; i++) if (base[i]) have[base[i]] = (have[base[i]] || 0) + 1;
+	function exactShape(cd){ return !(cd.shape == 'row' || cd.shape == 'col' || cd.shape == 'atleast'); }
+	function colorsOf(cd){
+		return cd.color == 'any'
+			? CONDITION_COLORS.map(function(c){ return c[0]; }).filter(function(c){ return c != 'any'; })
+			: [cd.color];
+	}
+	function soloCost(cells, color, border){
+		var lay = { need: {}, owner: {}, border: border };
+		lay.need[color] = cells;
+		for (var k = 0; k < cells.length; k++) lay.owner[cells[k]] = color;
+		return layoutCost(base, lay, -1);
+	}
+	function byCost(a, b){ return a.solo - b.solo; }
+	var results = [], visits = 0;
+
+	for (var mask = 1; mask < (1 << inst.length) - 1; mask++){ // bit set = forms on the cascade
+		var A = [], B = [], ok = true;
+		for (i = 0; i < inst.length; i++){
+			if ((mask >> i) & 1) { if (!inst[i].cascade) ok = false; B.push(inst[i]); }
+			else A.push(inst[i]);
+		}
+		if (!ok) continue;
+		var optA = A.map(function(cd){
+			var list = [];
+			for (var t = 0; t < cd.templates.length; t++){
+				var colors = colorsOf(cd);
+				for (var c = 0; c < colors.length; c++){
+					var tpl = cd.templates[t], color = colors[c];
+					if ((have[color] || 0) < tpl.cells.length) continue;
+					var border = exactShape(cd) ? tpl.border.map(function(p){ return [p, color]; }) : [];
+					list.push({ cells: tpl.cells, border: border, color: color, solo: soloCost(tpl.cells, color, border) });
+				}
+			}
+			return list.sort(byCost).slice(0, PER_SHAPE);
+		});
+		var ownerA = {}, bordersA = [];
+		var placeB = function(){
+			visits++;
+			for (var b = 0; b < bordersA.length; b++) if (ownerA[bordersA[b][0]] === bordersA[b][1]) return; // same-coloured stage-0 shapes touching
+			// where each cell's orb was before the fall (-1: empty after it)
+			var toPre = [], x, y, k;
+			for (k = 0; k < rows*cols; k++) toPre.push(-1);
+			for (x = 0; x < rows; x++){
+				var keep = [];
+				for (y = cols - 1; y >= 0; y--) if (ownerA[y*rows + x] === undefined) keep.push(y);
+				for (k = 0; k < keep.length; k++) toPre[(cols - 1 - k)*rows + x] = keep[k]*rows + x;
+			}
+			var optB = B.map(function(cd){
+				var list = [];
+				for (var t = 0; t < cd.templates.length; t++){
+					var tpl = cd.templates[t], fits = true, j;
+					for (j = 0; j < tpl.cells.length; j++) if (toPre[tpl.cells[j]] < 0) { fits = false; break; }
+					if (!fits) continue;
+					var pre = tpl.cells.map(function(p){ return toPre[p]; });
+					var postBorder = exactShape(cd) ? tpl.border.filter(function(p){ return toPre[p] >= 0; }) : [];
+					var colors = colorsOf(cd);
+					for (var c = 0; c < colors.length; c++){
+						var color = colors[c];
+						if ((have[color] || 0) < pre.length) continue;
+						var preBorder = postBorder.map(function(p){ return [toPre[p], color]; });
+						list.push({ post: tpl.cells, pre: pre, color: color, postBorder: postBorder, preBorder: preBorder, solo: soloCost(pre, color, preBorder) });
+					}
+				}
+				return list.sort(byCost).slice(0, PER_SHAPE);
+			});
+			var ownerPost = {}, ownerPre = {}, bordersPost = [], picked = [];
+			var leaf = function(){
+				visits++;
+				var q, c2;
+				for (q = 0; q < bordersPost.length; q++) if (ownerPost[bordersPost[q][0]] === bordersPost[q][1]) return; // same-coloured cascade shapes touching
+				var owner = {}, p;
+				for (p in ownerA) owner[p] = ownerA[p];
+				for (p in ownerPre) owner[p] = ownerPre[p];
+				// the cascade shapes' orbs must not already clear on stage 0
+				var partial = [], marked = {};
+				for (q = 0; q < rows*cols; q++) partial.push(owner[q] === undefined ? null : owner[q]);
+				markRunsArr(partial, marked);
+				for (p in ownerPre) if (marked[p]) return;
+				var lay = { need: {}, owner: owner, border: [], cascade: true };
+				for (p in owner) (lay.need[owner[p]] = lay.need[owner[p]] || []).push(+p);
+				for (c2 in lay.need) if (lay.need[c2].length > (have[c2] || 0)) return;
+				for (q = 0; q < bordersA.length; q++) if (owner[bordersA[q][0]] === undefined) lay.border.push(bordersA[q]);
+				for (q = 0; q < picked.length; q++)
+					for (var r = 0; r < picked[q].preBorder.length; r++)
+						if (owner[picked[q].preBorder[r][0]] === undefined) lay.border.push(picked[q].preBorder[r]);
+				lay.cost = layoutCost(base, lay, -1);
+				results.push(lay);
+				if (results.length > maxLayouts * 20){
+					results.sort(function(a, b2){ return a.cost - b2.cost; });
+					results.length = maxLayouts;
+				}
+			};
+			var recB = function(j){
+				if (visits > MAX_VISITS) return;
+				if (j == B.length) return leaf();
+				for (var o = 0; o < optB[j].length; o++){
+					var op = optB[j][o], clash = false, m;
+					for (m = 0; m < op.post.length; m++) if (ownerPost[op.post[m]] !== undefined) { clash = true; break; }
+					if (clash) continue;
+					for (m = 0; m < op.post.length; m++){ ownerPost[op.post[m]] = op.color; ownerPre[op.pre[m]] = op.color; }
+					for (m = 0; m < op.postBorder.length; m++) bordersPost.push([op.postBorder[m], op.color]);
+					picked.push(op);
+					recB(j + 1);
+					picked.pop();
+					bordersPost.length -= op.postBorder.length;
+					for (m = 0; m < op.post.length; m++){ delete ownerPost[op.post[m]]; delete ownerPre[op.pre[m]]; }
+				}
+			};
+			recB(0);
+		};
+		var recA = function(j){
+			if (visits > MAX_VISITS) return;
+			if (j == A.length) return placeB();
+			for (var o = 0; o < optA[j].length; o++){
+				var op = optA[j][o], clash = false, m;
+				for (m = 0; m < op.cells.length; m++) if (ownerA[op.cells[m]] !== undefined) { clash = true; break; }
+				if (clash) continue;
+				for (m = 0; m < op.cells.length; m++) ownerA[op.cells[m]] = op.color;
+				for (m = 0; m < op.border.length; m++) bordersA.push(op.border[m]);
+				recA(j + 1);
+				bordersA.length -= op.border.length;
+				for (m = 0; m < op.cells.length; m++) delete ownerA[op.cells[m]];
+			}
+		};
+		recA(0);
+	}
+	results.sort(function(a, b2){ return a.cost - b2.cost; });
+	return results.slice(0, maxLayouts);
+}
+
 function runAnalysis(){
 	if (analysisRunning) return;
 	analysisRunning = true;
@@ -1497,7 +1643,19 @@ function runAnalysis(){
 	setAnalyzeStatus('解析中...');
 
 	// Phase 1 (conditions only): search toward each finished layout in turn.
-	var layouts = conds.length ? buildConditionLayouts(base, conds, levelParams.layouts) : [];
+	// Layouts finished on the move itself, and (if any condition allows
+	// cascades) ones finished by a cascade, taken in turn so both kinds
+	// get searched early, when the move limit is still loose.
+	var layouts = [];
+	if (conds.length) {
+		var direct = buildConditionLayouts(base, conds, levelParams.layouts);
+		var anyCascade = conds.some(function(c){ return c.cascade; });
+		var viaCascade = anyCascade ? buildCascadeLayouts(base, conds, levelParams.layouts) : [];
+		for (var lk = 0; lk < Math.max(direct.length, viaCascade.length); lk++){
+			if (lk < direct.length) layouts.push(direct[lk]);
+			if (lk < viaCascade.length) layouts.push(viaCascade[lk]);
+		}
+	}
 	var li = 0, lBeam = null, lDepth = 0;
 	function layoutStep(){
 		if (li >= layouts.length) return classicOrFinish();
@@ -1513,7 +1671,7 @@ function runAnalysis(){
 			return (ck.met >= totalNeed ? 1000000 : 0) - layoutCost(nb, lay, np)*1000 + ck.combos*100 + countAdjacentPairs(nb);
 		});
 		lBeam = cand.slice(0, levelParams.layoutBeam);
-		setAnalyzeStatus('解析中... 完成形 ' + (li+1) + '/' + layouts.length + '・' + lDepth + '手 ('
+		setAnalyzeStatus('解析中... 完成形 ' + (li+1) + '/' + layouts.length + (lay.cascade ? '(連鎖)' : '') + '・' + lDepth + '手 ('
 			+ conditionStatus() + (fullDepth > 0 ? '最短 ' + fullDepth + '手・' : '') + '最大 ' + bestCombos + 'コンボ)');
 		if (!lBeam.length || lDepth >= limit || (objective == 'shortest' && metThisDepth)) { li++; lBeam = null; }
 		setTimeout(layoutStep, 0);
