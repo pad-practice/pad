@@ -13,10 +13,10 @@
 	<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
 	<script src="https://code.jquery.com/jquery-1.11.3.min.js"></script>
 	<script src="https://code.jquery.com/ui/1.11.3/jquery-ui.min.js"></script>
-	<link rel="stylesheet" type="text/css" href="pad.css?v16">
+	<link rel="stylesheet" type="text/css" href="pad.css?v17">
 	<link rel="stylesheet" type="text/css" href="menu.css?v4">
 	<link rel="shortcut icon" href="favicon.ico" />
-	<script src="pad.js?v25"></script>
+	<script src="pad.js?v26"></script>
 </head>
 <body><div id="wrapwrap">
 	<div id="lineback">
@@ -50,10 +50,20 @@
 			<div id="analyzeConds">
 				<div id="condList"></div>
 				<button onclick="requestAction('addcond')" class="modebutton" id="addCondBtn">＋ 消し方の条件を追加</button>
-				<div id="analyzeObjective" style="display:none">
+				<div id="analyzeObjective">
 					目的:
-					<button onclick="requestAction('analyzeobjective', 'maxcombo')" id="objMaxBtn" class="modebutton modebutton-active">条件＋盤面最大</button>
+					<button onclick="requestAction('analyzeobjective', 'maxcombo')" id="objMaxBtn" class="modebutton modebutton-active">盤面最大</button>
+					<button onclick="requestAction('analyzeobjective', 'points')" id="objPointsBtn" class="modebutton">加点最大</button>
 					<button onclick="requestAction('analyzeobjective', 'shortest')" id="objShortBtn" class="modebutton">条件のみ(最短)</button>
+				</div>
+				<div id="scoreRulesPanel" style="display:none">
+					<div class="scoreRulesTitle">加点ルール</div>
+					<div id="scoreRuleList"></div>
+					<div class="scoreRuleRow">
+						同じ色の2コンボ目以降 1コンボごとに +<input type="number" id="sameColorBonus" class="ruleNum" min="0" step="100" onchange="updateSameColorBonus(this.value)">点
+					</div>
+					<button onclick="addScoreRule()" class="modebutton">＋ ルールを追加</button>
+					<button onclick="resetScoreRules()" class="modebutton">初期値に戻す</button>
 				</div>
 			</div>
 			<button onclick="requestAction('analyze')" class="modebutton">解析開始</button>

@@ -1213,12 +1213,164 @@ function conditionShortages(b, conds){
 	return out;
 }
 
+// ---- 加点ルール (ranking-dungeon style points) ----
+//
+// With the 加点最大 objective, routes and arrangements are ranked by
+// points instead of combos: each cleared group earns the points of every
+// rule its shape and colour match (cascade groups included, as in the
+// game), and every combo after the first of the same colour earns
+// sameColorBonus. Plain combos earn nothing by themselves. The defaults
+// are one ranking dungeon's rules; the user can edit them.
+var SCORE_RULES_KEY = 'puzzlePracticeScoreRules';
+var DEFAULT_SCORE_RULES = [
+	{ shape: 'row',   color: 'any',   size: 5, points: 2000 },
+	{ shape: 'cross', color: 'any',   size: 5, points: 2300 },
+	{ shape: 'T',     color: 'any',   size: 5, points: 2500 },
+	{ shape: 'L',     color: 'any',   size: 5, points: 1600 },
+	{ shape: 'col',   color: 'heart', size: 5, points: 1700 }
+];
+var DEFAULT_SAME_COLOR_BONUS = 1000;
+var scoreRules = DEFAULT_SCORE_RULES.map(function(r){ return Object.assign({}, r); });
+var sameColorBonus = DEFAULT_SAME_COLOR_BONUS;
+
+// Points one cleared group earns from the rules (not counting the
+// same-colour bonus, which depends on the whole clear).
+function groupRulePoints(color, shapes){
+	var pts = 0;
+	for (var i = 0; i < scoreRules.length; i++){
+		var r = scoreRules[i];
+		if ((r.color == 'any' || r.color === color) && groupMatchesCondition(r, shapes)) pts += r.points;
+	}
+	return pts;
+}
+
+// Collects points over one simulated clear: call add() for each group,
+// then total().
+function makePointsCounter(){
+	var perColor = {}, pts = 0;
+	return {
+		add: function(color, shapes){
+			perColor[color] = (perColor[color] || 0) + 1;
+			pts += groupRulePoints(color, shapes);
+		},
+		total: function(){
+			var t = pts;
+			for (var c in perColor) t += Math.max(0, perColor[c] - 1) * sameColorBonus;
+			return t;
+		}
+	};
+}
+
+// For arrangement search: per colour, the mixes of point shapes and plain
+// 3-combos its orb count allows, best first (ignoring where they'd fit).
+function colorPointPlans(counts, topK){
+	var plans = {};
+	for (var color in counts){
+		if (color === 'black') continue;
+		var n = counts[color], items = [], out = [];
+		for (var i = 0; i < scoreRules.length; i++){
+			var r = scoreRules[i];
+			if (r.color == 'any' || r.color === color) items.push({ rule: r, size: conditionOrbCount(r), pts: r.points });
+		}
+		items.push({ rule: null, size: minimumMatches + 1, pts: 0 }); // a plain combo
+		var chosen = [];
+		var rec = function(idx, left){
+			if (idx == items.length){
+				if (!chosen.length) return;
+				var pts = 0;
+				for (var k = 0; k < chosen.length; k++) pts += chosen[k].pts;
+				out.push({ pts: pts + (chosen.length - 1) * sameColorBonus, items: chosen.slice() });
+				return;
+			}
+			rec(idx + 1, left);
+			var added = 0;
+			while (left >= items[idx].size * (added + 1) && added < 6){
+				added++;
+				chosen.push(items[idx]);
+				rec(idx + 1, left - items[idx].size * added);
+			}
+			chosen.length -= added;
+		};
+		rec(0, n);
+		out.sort(function(a, b){ return b.pts - a.pts; });
+		plans[color] = out.slice(0, topK);
+	}
+	return plans;
+}
+
+function loadScoreRules(){
+	try {
+		var saved = JSON.parse(localStorage.getItem(SCORE_RULES_KEY));
+		if (saved && saved.rules) {
+			scoreRules = saved.rules.filter(function(r){ return CLEAR_SHAPES[r.shape]; });
+			sameColorBonus = typeof saved.sameColorBonus == 'number' ? saved.sameColorBonus : DEFAULT_SAME_COLOR_BONUS;
+		}
+	} catch (e) {}
+}
+
+function saveScoreRules(){
+	try { localStorage.setItem(SCORE_RULES_KEY, JSON.stringify({ rules: scoreRules, sameColorBonus: sameColorBonus })); } catch (e) {}
+}
+
+function renderScoreRules(){
+	var panel = document.getElementById('scoreRulesPanel');
+	if (!panel) return;
+	panel.style.display = analysisObjective == 'points' ? '' : 'none';
+	var html = '', i, k;
+	for (i = 0; i < scoreRules.length; i++){
+		var r = scoreRules[i];
+		html += '<div class="condRow"><select onchange="updateScoreRule(' + i + ', \'color\', this.value)">';
+		for (k = 0; k < CONDITION_COLORS.length; k++)
+			html += '<option value="' + CONDITION_COLORS[k][0] + '"' + (r.color == CONDITION_COLORS[k][0] ? ' selected' : '') + '>' + CONDITION_COLORS[k][1] + '</option>';
+		html += '</select><select onchange="updateScoreRule(' + i + ', \'shape\', this.value)">';
+		for (var sh in CLEAR_SHAPES)
+			html += '<option value="' + sh + '"' + (r.shape == sh ? ' selected' : '') + '>' + CLEAR_SHAPES[sh].label + '</option>';
+		html += '</select>';
+		if (r.shape == 'atleast')
+			html += '<input type="number" class="condNum" min="3" max="' + rows*cols + '" value="' + r.size + '" onchange="updateScoreRule(' + i + ', \'size\', this.value)">個以上';
+		html += ' <input type="number" class="ruleNum" min="0" step="100" value="' + r.points + '" onchange="updateScoreRule(' + i + ', \'points\', this.value)">点'
+			+ '<button class="condRemove" onclick="updateScoreRule(' + i + ', \'remove\')" title="削除">✕</button></div>';
+	}
+	document.getElementById('scoreRuleList').innerHTML = html;
+	document.getElementById('sameColorBonus').value = sameColorBonus;
+}
+
+function addScoreRule(){
+	scoreRules.push({ shape: 'cross', color: 'any', size: 5, points: 1000 });
+	saveScoreRules();
+	renderScoreRules();
+}
+
+function updateScoreRule(index, field, value){
+	var r = scoreRules[index];
+	if (!r) return;
+	if (field == 'remove') scoreRules.splice(index, 1);
+	else if (field == 'points') r.points = Math.max(0, parseInt(value) || 0);
+	else if (field == 'size') r.size = Math.max(3, Math.min(rows*cols, parseInt(value) || 5));
+	else r[field] = value;
+	saveScoreRules();
+	renderScoreRules();
+}
+
+function updateSameColorBonus(value){
+	sameColorBonus = Math.max(0, parseInt(value) || 0);
+	saveScoreRules();
+	renderScoreRules();
+}
+
+function resetScoreRules(){
+	scoreRules = DEFAULT_SCORE_RULES.map(function(r){ return Object.assign({}, r); });
+	sameColorBonus = DEFAULT_SAME_COLOR_BONUS;
+	saveScoreRules();
+	renderScoreRules();
+}
+
 function loadAnalysisConditions(){
 	try {
 		var saved = JSON.parse(localStorage.getItem(CONDITIONS_KEY));
 		if (saved && saved.conds) {
 			analysisConditions = saved.conds.filter(function(c){ return CLEAR_SHAPES[c.shape]; });
-			analysisObjective = saved.objective == 'shortest' ? 'shortest' : 'maxcombo';
+			analysisObjective = (saved.objective == 'shortest' || saved.objective == 'points') ? saved.objective : 'maxcombo';
 		}
 	} catch (e) {}
 }
@@ -1249,9 +1401,13 @@ function renderAnalysisConditions(){
 			+ '</div>';
 	}
 	list.innerHTML = html;
-	document.getElementById('analyzeObjective').style.display = analysisConditions.length ? '' : 'none';
+	// 条件のみ only makes sense with conditions
+	if (!analysisConditions.length && analysisObjective == 'shortest') analysisObjective = 'maxcombo';
+	document.getElementById('objShortBtn').style.display = analysisConditions.length ? '' : 'none';
 	document.getElementById('objMaxBtn').classList.toggle('modebutton-active', analysisObjective == 'maxcombo');
+	document.getElementById('objPointsBtn').classList.toggle('modebutton-active', analysisObjective == 'points');
 	document.getElementById('objShortBtn').classList.toggle('modebutton-active', analysisObjective == 'shortest');
+	renderScoreRules();
 }
 
 function addAnalysisCondition(){
@@ -1542,7 +1698,8 @@ function runAnalysis(){
 	var conds = analysisConditions.map(function(c){
 		return { shape: c.shape, color: c.color, count: c.count, size: c.size, cascade: c.cascade };
 	});
-	var objective = conds.length ? analysisObjective : 'maxcombo';
+	var objective = analysisObjective == 'points' ? 'points' : (conds.length ? analysisObjective : 'maxcombo');
+	var usePoints = objective == 'points';
 	var totalNeed = 0;
 	for (var ci = 0; ci < conds.length; ci++){
 		conds[ci].templates = buildShapeTemplates(conds[ci]);
@@ -1551,12 +1708,15 @@ function runAnalysis(){
 	var target = conds.length ? conditionComboTarget(base, conds) : maxPossibleCombosFromCounts(base);
 	var shortages = conditionShortages(base, conds);
 
-	// Which conditions the board a move leaves meets, and its combos.
+	// Which conditions the board a move leaves meets, its combos, and (for
+	// 加点最大) its points.
 	function checkConditions(nb){
 		var found = [], i;
+		var counter = usePoints ? makePointsCounter() : null;
 		for (i = 0; i < conds.length; i++) found.push(0);
-		var combos = simulateCascade(nb.slice(), conds.length ? function(color, cells, stage){
+		var combos = simulateCascade(nb.slice(), (conds.length || counter) ? function(color, cells, stage){
 			var shapes = null;
+			if (counter) { shapes = groupShapes(cells); counter.add(color, shapes); }
 			for (var j = 0; j < conds.length; j++){
 				var cd = conds[j];
 				if (stage > 0 && !cd.cascade) continue;
@@ -1567,13 +1727,18 @@ function runAnalysis(){
 		} : null);
 		var met = 0;
 		for (i = 0; i < conds.length; i++) met += Math.min(found[i], conds[i].count);
-		return { combos: combos, found: found, met: met };
+		return { combos: combos, found: found, met: met, points: counter ? counter.total() : 0 };
 	}
 
-	// Result ranking: most conditions met first; then most combos
-	// (maxcombo) or fewest moves (shortest).
+	// What the beams score beyond the conditions: points or combos
+	// (points / 10 keeps them on the same scale as combos * 100).
+	function gain(ck){ return usePoints ? ck.points / 10 : ck.combos * 100; }
+
+	// Result ranking: most conditions met first; then most points
+	// (points), most combos (maxcombo) or fewest moves (shortest).
 	function better(a, b2){
 		if (a.met != b2.met) return b2.met - a.met;
+		if (usePoints && a.points != b2.points) return b2.points - a.points;
 		if (objective == 'shortest') {
 			if (a.path.length != b2.path.length) return a.path.length - b2.path.length;
 			return b2.combos - a.combos;
@@ -1584,17 +1749,18 @@ function runAnalysis(){
 
 	// Candidate results; routes meeting fewer conditions are kept too, so
 	// the closest routes can be shown when none meets them all.
-	var bestMet = 0, bestCombos = 0, bestFoundDepth = -1, fullDepth = -1;
+	var bestMet = 0, bestCombos = 0, bestPoints = 0, bestFoundDepth = -1, fullDepth = -1;
 	var pool = [];
 	function record(ck, path, depth){
 		if (!(ck.combos > 0 || ck.met > 0)) return;
-		if (ck.met > bestMet || (ck.met == bestMet && ck.combos > bestCombos)){
+		if (ck.met > bestMet || (ck.met == bestMet && (usePoints ? ck.points > bestPoints : ck.combos > bestCombos))){
 			bestMet = ck.met;
 			bestCombos = ck.combos;
+			bestPoints = ck.points;
 			bestFoundDepth = depth;
 		}
 		if (ck.met >= totalNeed && (fullDepth < 0 || depth < fullDepth)) fullDepth = depth;
-		if (ck.met >= bestMet - 1) pool.push({ path: path, combos: ck.combos, met: ck.met, found: ck.found });
+		if (ck.met >= bestMet - 1) pool.push({ path: path, combos: ck.combos, met: ck.met, found: ck.found, points: ck.points });
 		if (pool.length > 600) { pool.sort(better); pool = pool.slice(0, 300); }
 	}
 
@@ -1668,11 +1834,11 @@ function runAnalysis(){
 		var metThisDepth = false;
 		var cand = lDepth > limit ? [] : expand(lBeam, lDepth, function(nb, np, ck){
 			if (ck.met >= totalNeed) metThisDepth = true;
-			return (ck.met >= totalNeed ? 1000000 : 0) - layoutCost(nb, lay, np)*1000 + ck.combos*100 + countAdjacentPairs(nb);
+			return (ck.met >= totalNeed ? 1000000 : 0) - layoutCost(nb, lay, np)*1000 + gain(ck) + countAdjacentPairs(nb);
 		});
 		lBeam = cand.slice(0, levelParams.layoutBeam);
 		setAnalyzeStatus('解析中... 完成形 ' + (li+1) + '/' + layouts.length + (lay.cascade ? '(連鎖)' : '') + '・' + lDepth + '手 ('
-			+ conditionStatus() + (fullDepth > 0 ? '最短 ' + fullDepth + '手・' : '') + '最大 ' + bestCombos + 'コンボ)');
+			+ conditionStatus() + (fullDepth > 0 ? '最短 ' + fullDepth + '手・' : '') + '最大 ' + (usePoints ? bestPoints + '点' : bestCombos + 'コンボ') + ')');
 		if (!lBeam.length || lDepth >= limit || (objective == 'shortest' && metThisDepth)) { li++; lBeam = null; }
 		setTimeout(layoutStep, 0);
 	}
@@ -1689,15 +1855,16 @@ function runAnalysis(){
 				var cost = 0;
 				for (var i = 0; i < conds.length; i++)
 					if (ck.found[i] < conds[i].count) cost += conditionCost(nb, conds[i], conds[i].templates, np);
-				return ck.met*1000000 - cost*1000 + ck.combos*100 + countAdjacentPairs(nb);
+				return ck.met*1000000 - cost*1000 + gain(ck) + countAdjacentPairs(nb);
 			});
 			beam = cand.slice(0, levelParams.beam);
-			setAnalyzeStatus('解析中... ' + depth + '/' + maxDepth + '手 (' + conditionStatus() + '現時点の最大: ' + bestCombos + 'コンボ)');
+			setAnalyzeStatus('解析中... ' + depth + '/' + maxDepth + '手 (' + conditionStatus() + '現時点の最大: ' + (usePoints ? bestPoints + '点' : bestCombos + 'コンボ') + ')');
 			var allMet = (bestMet >= totalNeed && bestFoundDepth > -1);
 			var done;
 			// for "shortest", once every route one move shorter than the best
 			// full route has been looked at, nothing shorter is left to find
 			if (objective == 'shortest') done = conds.length ? (fullDepth > 0 && depth >= fullDepth - 1) : allMet;
+			else if (usePoints) done = false; // no known ceiling for points: search every depth
 			else done = allMet && bestCombos >= target && depth >= bestFoundDepth + extraDepthAfterBest;
 			if (done || depth >= maxDepth || beam.length === 0) finish();
 			else setTimeout(step, 0);
@@ -1716,7 +1883,7 @@ function runAnalysis(){
 			finals.push(pool[i]);
 		}
 		analysisSolutions = finals;
-		renderAnalysisResults({ conds: conds, totalNeed: totalNeed, bestMet: bestMet, bestCombos: bestCombos, target: target, shortages: shortages });
+		renderAnalysisResults({ conds: conds, totalNeed: totalNeed, bestMet: bestMet, bestCombos: bestCombos, bestPoints: bestPoints, usePoints: usePoints, target: target, shortages: shortages });
 	}
 
 	setTimeout(layoutStep, 0);
@@ -1733,7 +1900,7 @@ function renderAnalysisResults(info){
 	var html = '';
 	for (var i = 0; i < analysisSolutions.length; i++){
 		var s = analysisSolutions[i];
-		html += '<div class="analyzeItem">' + (i+1) + '. ' + s.combos + 'コンボ / ' + (s.path.length-1) + '手'
+		html += '<div class="analyzeItem">' + (i+1) + '. ' + (info.usePoints ? s.points + '点 / ' : '') + s.combos + 'コンボ / ' + (s.path.length-1) + '手'
 			+ ' <button onclick="requestAction(\'showsolution\', ' + i + ')">ルート表示</button>'
 			+ ' <button onclick="requestAction(\'playsolution\', ' + i + ')">再生</button>';
 		if (conds.length) {
@@ -1749,7 +1916,8 @@ function renderAnalysisResults(info){
 	}
 	container.innerHTML = html;
 	var status;
-	if (!conds.length) status = '解析完了: 最大' + info.bestCombos + 'コンボ (盤面の理論値 ' + info.target + 'コンボ)';
+	if (info.usePoints && (!conds.length || info.bestMet >= info.totalNeed)) status = '解析完了: 最大' + info.bestPoints + '点' + (conds.length ? ' (条件をすべて満たしました)' : '');
+	else if (!conds.length) status = '解析完了: 最大' + info.bestCombos + 'コンボ (盤面の理論値 ' + info.target + 'コンボ)';
 	else if (info.bestMet >= info.totalNeed) status = '解析完了: 条件をすべて満たしました (' + info.bestCombos + 'コンボ)';
 	else status = '条件をすべて満たすルートは見つかりませんでした。近いルートを表示します (条件 ' + info.bestMet + '/' + info.totalNeed + ')'
 		+ (info.shortages.length ? ' — ドロップ不足: ' + info.shortages.join('、') : '');
@@ -1774,12 +1942,14 @@ var ARRANGE_LEVELS = {
 };
 var analysisArrangements = [];
 
-function evaluateArrangement(b, conds){
+function evaluateArrangement(b, conds, usePoints){
 	var found = [], stages = 0, i;
+	var counter = usePoints ? makePointsCounter() : null;
 	for (i = 0; i < conds.length; i++) found.push(0);
 	var combos = simulateCascade(b.slice(), function(color, cells, stage){
 		if (stage + 1 > stages) stages = stage + 1;
 		var shapes = null;
+		if (counter) { shapes = groupShapes(cells); counter.add(color, shapes); }
 		for (var j = 0; j < conds.length; j++){
 			var cd = conds[j];
 			if (stage > 0 && !cd.cascade) continue;
@@ -1793,7 +1963,7 @@ function evaluateArrangement(b, conds){
 		met += Math.min(found[i], conds[i].count);
 		if (found[i] < conds[i].count) cost += conditionCost(b, conds[i], conds[i].templates, -1);
 	}
-	return { met: met, combos: combos, stages: stages, cost: cost, found: found };
+	return { met: met, combos: combos, stages: stages, cost: cost, found: found, points: counter ? counter.total() : 0 };
 }
 
 function runArrangement(){
@@ -1807,38 +1977,45 @@ function runArrangement(){
 	});
 	var totalNeed = 0, i;
 	for (i = 0; i < conds.length; i++){ conds[i].templates = buildShapeTemplates(conds[i]); totalNeed += conds[i].count; }
-	var comboMatters = !(conds.length && analysisObjective == 'shortest');
+	var usePoints = analysisObjective == 'points';
+	var comboMatters = !usePoints && !(conds.length && analysisObjective == 'shortest');
 	var target = conds.length ? conditionComboTarget(pool, conds) : maxPossibleCombosFromCounts(pool);
 	var shortages = conditionShortages(pool, conds);
 	// conditions first (with the distance term steering toward them), then
-	// combos, then fewer cascade stages
-	function score(e){ return e.met*10000 - e.cost*100 + (comboMatters ? e.combos*500 : 0) - e.stages*20; }
+	// points or combos, then fewer cascade stages
+	function score(e){
+		if (usePoints) return e.met*100000 - e.cost*1000 + e.points - e.stages*20;
+		return e.met*10000 - e.cost*100 + (comboMatters ? e.combos*500 : 0) - e.stages*20;
+	}
 	function better(a, b){
+		if (usePoints && a.points != b.points) return b.points - a.points;
 		if (comboMatters && a.combos != b.combos) return b.combos - a.combos;
 		if (a.stages != b.stages) return a.stages - b.stages;
 		return b.combos - a.combos;
 	}
+	var counts = {};
+	for (i = 0; i < pool.length; i++) counts[pool[i]] = (counts[pool[i]] || 0) + 1;
+	var seed = 12345;
+	function rnd(){ seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
 	var starts = [];
 	if (conds.length){
 		starts = buildConditionLayouts(pool, conds, params.restarts);
 		if (conds.some(function(c){ return c.cascade; })) starts = starts.concat(buildCascadeLayouts(pool, conds, params.restarts));
 	}
+	if (usePoints) starts = starts.concat(pointPlanLayouts(pool, counts, conds, Math.ceil(params.restarts / 2), rnd));
 	if (!starts.length) starts = [null];
-	var counts = {};
-	for (i = 0; i < pool.length; i++) counts[pool[i]] = (counts[pool[i]] || 0) + 1;
-	var seed = 12345;
-	function rnd(){ seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
 	var results = {}, best = null;
 	function keep(b, e){
 		if (e.met < totalNeed) return;
 		var key = b.join(',');
 		if (results[key]) return;
-		var r = { board: b.slice(), combos: e.combos, stages: e.stages, found: e.found.slice() };
+		var r = { board: b.slice(), combos: e.combos, stages: e.stages, found: e.found.slice(), points: e.points };
 		results[key] = r;
 		if (!best || better(r, best) < 0) best = r;
 	}
 	var restart = 0, b = null, e = null, s = 0, T = 0, it = 0;
-	var T0 = 400, TMIN = 5, COOL = Math.pow(TMIN / T0, 1 / params.iters);
+	// points move in steps of ~1000 rather than combos' 500, so start hotter
+	var T0 = usePoints ? 1500 : 400, TMIN = usePoints ? 20 : 5, COOL = Math.pow(TMIN / T0, 1 / params.iters);
 	document.getElementById('analyzeResults').innerHTML = '';
 
 	function startRestart(){
@@ -1851,7 +2028,7 @@ function runArrangement(){
 		for (c in left) for (k = 0; k < left[c]; k++) rest.push(c);
 		for (k = rest.length - 1; k > 0; k--){ var j = Math.floor(rnd() * (k + 1)), t = rest[k]; rest[k] = rest[j]; rest[j] = t; }
 		for (k = 0, j = 0; k < b.length; k++) if (b[k] === null) b[k] = rest[j++];
-		e = evaluateArrangement(b, conds); s = score(e); T = T0; it = 0;
+		e = evaluateArrangement(b, conds, usePoints); s = score(e); T = T0; it = 0;
 		keep(b, e);
 	}
 
@@ -1862,15 +2039,16 @@ function runArrangement(){
 			var x = Math.floor(rnd() * b.length), y = Math.floor(rnd() * b.length);
 			if (b[x] === b[y]) continue;
 			var t = b[x]; b[x] = b[y]; b[y] = t;
-			var e2 = evaluateArrangement(b, conds), s2 = score(e2);
+			var e2 = evaluateArrangement(b, conds, usePoints), s2 = score(e2);
 			if (s2 >= s || rnd() < Math.exp((s2 - s) / T)) { e = e2; s = s2; keep(b, e); }
 			else { t = b[x]; b[x] = b[y]; b[y] = t; }
 			T = Math.max(TMIN, T * COOL);
 		}
 		setAnalyzeStatus('配置を探索中... ' + (restart + 1) + '/' + params.restarts
-			+ (best ? ' (最良: ' + best.combos + 'コンボ・' + best.stages + '段)' : ''));
+			+ (best ? ' (最良: ' + (usePoints ? best.points + '点・' : '') + best.combos + 'コンボ・' + best.stages + '段)' : ''));
 		if (it >= params.iters){ restart++; b = null; }
-		var perfect = best && (!comboMatters || best.combos >= target) && best.stages <= 1;
+		// no known ceiling for points, so a points search always runs to the end
+		var perfect = !usePoints && best && (!comboMatters || best.combos >= target) && best.stages <= 1;
 		if (restart >= params.restarts || perfect) finish();
 		else setTimeout(chunk, 0);
 	}
@@ -1890,7 +2068,7 @@ function runArrangement(){
 			if (!near) picked.push(list[n]);
 		}
 		analysisArrangements = picked;
-		renderArrangements(conds, totalNeed, target, shortages);
+		renderArrangements(conds, totalNeed, target, shortages, usePoints);
 	}
 
 	setAnalyzeStatus('配置を探索中...');
@@ -1901,7 +2079,34 @@ function arrangementPattern(board){
 	return board.map(function(c){ return toLetter(c).toUpperCase(); }).join('');
 }
 
-function renderArrangements(conds, totalNeed, target, shortages){
+// Starting layouts for a points search: each colour's best point plans
+// (colorPointPlans) turned into shape conditions, together with the
+// user's own conditions, and laid out like a condition search. When the
+// shapes don't all fit, the last ones are dropped until a layout exists.
+function pointPlanLayouts(pool, counts, conds, variants, rnd){
+	var plans = colorPointPlans(counts, 2), colors = Object.keys(plans), out = [];
+	for (var v = 0; v < variants; v++){
+		var cs = conds.slice(), c, k;
+		for (c = 0; c < colors.length; c++){
+			var list = plans[colors[c]];
+			if (!list.length) continue;
+			var plan = list[v === 0 ? 0 : Math.floor(rnd() * list.length)];
+			for (k = 0; k < plan.items.length; k++){
+				var r = plan.items[k].rule;
+				if (r) cs.push({ shape: r.shape, color: colors[c], count: 1, size: r.size, cascade: true });
+			}
+		}
+		while (cs.length > conds.length){
+			for (k = 0; k < cs.length; k++) if (!cs[k].templates) cs[k].templates = buildShapeTemplates(cs[k]);
+			var lays = buildConditionLayouts(pool, cs, 2);
+			if (lays.length){ out = out.concat(lays); break; }
+			cs.pop();
+		}
+	}
+	return out;
+}
+
+function renderArrangements(conds, totalNeed, target, shortages, usePoints){
 	var container = document.getElementById('analyzeResults');
 	if (!analysisArrangements.length){
 		container.innerHTML = '<div>条件をすべて含む配置は見つかりませんでした</div>';
@@ -1911,7 +2116,7 @@ function renderArrangements(conds, totalNeed, target, shortages){
 	var html = '';
 	for (var i = 0; i < analysisArrangements.length; i++){
 		var a = analysisArrangements[i];
-		html += '<div class="analyzeItem arrangeItem">' + (i+1) + '. ' + a.combos + 'コンボ / ' + (a.stages <= 1 ? '連鎖なし' : a.stages + '段連鎖')
+		html += '<div class="analyzeItem arrangeItem">' + (i+1) + '. ' + (usePoints ? a.points + '点 / ' : '') + a.combos + 'コンボ / ' + (a.stages <= 1 ? '連鎖なし' : a.stages + '段連鎖')
 			+ ' <button onclick="requestAction(\'loadarrangement\', ' + i + ')">盤面に読込</button>'
 			+ ' <button onclick="requestAction(\'showarrangement\', ' + i + ')">消え方を見る</button>';
 		if (conds.length) {
@@ -1922,7 +2127,9 @@ function renderArrangements(conds, totalNeed, target, shortages){
 		html += miniBoardHtml({ rows: rows, cols: cols, pattern: arrangementPattern(a.board) }) + '</div>';
 	}
 	container.innerHTML = html;
-	setAnalyzeStatus('配置の探索完了: 最大' + analysisArrangements[0].combos + 'コンボ (理論値 ' + target + 'コンボ)');
+	setAnalyzeStatus(usePoints
+		? '配置の探索完了: 最大' + analysisArrangements[0].points + '点'
+		: '配置の探索完了: 最大' + analysisArrangements[0].combos + 'コンボ (理論値 ' + target + 'コンボ)');
 }
 
 function loadArrangement(index, showClears){
@@ -2935,6 +3142,7 @@ $(function(){		// CURSOR AT AND MOVING ORB SIZE
 	saveBoardState();
 	clearMemory('score');
 	renderLibrary();
+	loadScoreRules();
 	loadAnalysisConditions();
 	renderAnalysisConditions();
 	// A reload while the picker was open leaves #saved behind; start on

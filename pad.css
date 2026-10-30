@@ -645,6 +645,30 @@ border:1px solid #616261; -webkit-border-radius: 3px; -moz-border-radius: 3px;bo
 #analyzeObjective {
 	margin-top:6px;
 }
+#scoreRulesPanel {
+	margin:8px auto 0;
+	padding:8px 6px;
+	max-width:420px;
+	border:1px solid var(--panel-border);
+	border-radius:8px;
+}
+.scoreRulesTitle {
+	font-weight:bold;
+	margin-bottom:4px;
+}
+.scoreRuleRow {
+	margin:4px 0 6px;
+	font-size:13px;
+}
+.ruleNum {
+	width:5em;
+	border:1px solid var(--panel-border);
+	background:var(--panel-bg-2);
+	color:var(--text);
+	border-radius:6px;
+	padding:3px 4px;
+	font-size:14px;
+}
 .arrangeItem {
 	padding:6px 0;
 	border-bottom:1px solid var(--panel-border);
