@@ -1757,6 +1757,186 @@ function renderAnalysisResults(info){
 	requestAction('showsolution', 0);
 }
 
+// ---- 配置を探す (arrangement research) ----
+//
+// For studying the best possible clears (ranking dungeons, 4-player
+// battles): with the current board's orb counts, find whole-board
+// arrangements that make every condition's shape, ignoring how far they
+// are from the current board. Ranked by combos (unless the objective is
+// 条件のみ), then by fewer cascade stages. Starts from the route solver's
+// finished layouts (shape cells fixed, the rest shuffled in), then
+// improves each with simulated annealing over two-cell swaps; on test
+// boards that reached the theoretical combo count in a few seconds.
+var ARRANGE_LEVELS = {
+	fast:   { restarts: 6,  iters: 8000 },
+	normal: { restarts: 12, iters: 20000 },
+	deep:   { restarts: 24, iters: 40000 }
+};
+var analysisArrangements = [];
+
+function evaluateArrangement(b, conds){
+	var found = [], stages = 0, i;
+	for (i = 0; i < conds.length; i++) found.push(0);
+	var combos = simulateCascade(b.slice(), function(color, cells, stage){
+		if (stage + 1 > stages) stages = stage + 1;
+		var shapes = null;
+		for (var j = 0; j < conds.length; j++){
+			var cd = conds[j];
+			if (stage > 0 && !cd.cascade) continue;
+			if (cd.color != 'any' && cd.color !== color) continue;
+			shapes = shapes || groupShapes(cells);
+			if (groupMatchesCondition(cd, shapes)) found[j]++;
+		}
+	});
+	var met = 0, cost = 0;
+	for (i = 0; i < conds.length; i++){
+		met += Math.min(found[i], conds[i].count);
+		if (found[i] < conds[i].count) cost += conditionCost(b, conds[i], conds[i].templates, -1);
+	}
+	return { met: met, combos: combos, stages: stages, cost: cost, found: found };
+}
+
+function runArrangement(){
+	if (analysisRunning) return;
+	analysisRunning = true;
+	clearMemory('arrows');
+	var pool = boardArrayFromDivs();
+	var params = ARRANGE_LEVELS[analysisLevel] || ARRANGE_LEVELS.fast;
+	var conds = analysisConditions.map(function(c){
+		return { shape: c.shape, color: c.color, count: c.count, size: c.size, cascade: c.cascade };
+	});
+	var totalNeed = 0, i;
+	for (i = 0; i < conds.length; i++){ conds[i].templates = buildShapeTemplates(conds[i]); totalNeed += conds[i].count; }
+	var comboMatters = !(conds.length && analysisObjective == 'shortest');
+	var target = conds.length ? conditionComboTarget(pool, conds) : maxPossibleCombosFromCounts(pool);
+	var shortages = conditionShortages(pool, conds);
+	// conditions first (with the distance term steering toward them), then
+	// combos, then fewer cascade stages
+	function score(e){ return e.met*10000 - e.cost*100 + (comboMatters ? e.combos*500 : 0) - e.stages*20; }
+	function better(a, b){
+		if (comboMatters && a.combos != b.combos) return b.combos - a.combos;
+		if (a.stages != b.stages) return a.stages - b.stages;
+		return b.combos - a.combos;
+	}
+	var starts = [];
+	if (conds.length){
+		starts = buildConditionLayouts(pool, conds, params.restarts);
+		if (conds.some(function(c){ return c.cascade; })) starts = starts.concat(buildCascadeLayouts(pool, conds, params.restarts));
+	}
+	if (!starts.length) starts = [null];
+	var counts = {};
+	for (i = 0; i < pool.length; i++) counts[pool[i]] = (counts[pool[i]] || 0) + 1;
+	var seed = 12345;
+	function rnd(){ seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
+	var results = {}, best = null;
+	function keep(b, e){
+		if (e.met < totalNeed) return;
+		var key = b.join(',');
+		if (results[key]) return;
+		var r = { board: b.slice(), combos: e.combos, stages: e.stages, found: e.found.slice() };
+		results[key] = r;
+		if (!best || better(r, best) < 0) best = r;
+	}
+	var restart = 0, b = null, e = null, s = 0, T = 0, it = 0;
+	var T0 = 400, TMIN = 5, COOL = Math.pow(TMIN / T0, 1 / params.iters);
+	document.getElementById('analyzeResults').innerHTML = '';
+
+	function startRestart(){
+		var lay = starts[restart % starts.length], left = {}, c, k;
+		for (c in counts) left[c] = counts[c];
+		b = [];
+		for (k = 0; k < pool.length; k++) b.push(null);
+		if (lay) for (var p in lay.owner){ b[p] = lay.owner[p]; left[lay.owner[p]]--; }
+		var rest = [];
+		for (c in left) for (k = 0; k < left[c]; k++) rest.push(c);
+		for (k = rest.length - 1; k > 0; k--){ var j = Math.floor(rnd() * (k + 1)), t = rest[k]; rest[k] = rest[j]; rest[j] = t; }
+		for (k = 0, j = 0; k < b.length; k++) if (b[k] === null) b[k] = rest[j++];
+		e = evaluateArrangement(b, conds); s = score(e); T = T0; it = 0;
+		keep(b, e);
+	}
+
+	function chunk(){
+		if (!b) startRestart();
+		var end = Math.min(params.iters, it + 1500);
+		for (; it < end; it++){
+			var x = Math.floor(rnd() * b.length), y = Math.floor(rnd() * b.length);
+			if (b[x] === b[y]) continue;
+			var t = b[x]; b[x] = b[y]; b[y] = t;
+			var e2 = evaluateArrangement(b, conds), s2 = score(e2);
+			if (s2 >= s || rnd() < Math.exp((s2 - s) / T)) { e = e2; s = s2; keep(b, e); }
+			else { t = b[x]; b[x] = b[y]; b[y] = t; }
+			T = Math.max(TMIN, T * COOL);
+		}
+		setAnalyzeStatus('配置を探索中... ' + (restart + 1) + '/' + params.restarts
+			+ (best ? ' (最良: ' + best.combos + 'コンボ・' + best.stages + '段)' : ''));
+		if (it >= params.iters){ restart++; b = null; }
+		var perfect = best && (!comboMatters || best.combos >= target) && best.stages <= 1;
+		if (restart >= params.restarts || perfect) finish();
+		else setTimeout(chunk, 0);
+	}
+
+	function finish(){
+		analysisRunning = false;
+		var list = Object.keys(results).map(function(k){ return results[k]; }).sort(better);
+		// skip near-copies (a few leftover orbs swapped) so the list shows different ideas
+		var picked = [];
+		for (var n = 0; n < list.length && picked.length < 5; n++){
+			var near = false;
+			for (var m = 0; m < picked.length && !near; m++){
+				var diff = 0;
+				for (var q = 0; q < list[n].board.length; q++) if (list[n].board[q] !== picked[m].board[q]) diff++;
+				if (diff < 6) near = true;
+			}
+			if (!near) picked.push(list[n]);
+		}
+		analysisArrangements = picked;
+		renderArrangements(conds, totalNeed, target, shortages);
+	}
+
+	setAnalyzeStatus('配置を探索中...');
+	setTimeout(chunk, 0);
+}
+
+function arrangementPattern(board){
+	return board.map(function(c){ return toLetter(c).toUpperCase(); }).join('');
+}
+
+function renderArrangements(conds, totalNeed, target, shortages){
+	var container = document.getElementById('analyzeResults');
+	if (!analysisArrangements.length){
+		container.innerHTML = '<div>条件をすべて含む配置は見つかりませんでした</div>';
+		setAnalyzeStatus(shortages.length ? 'ドロップが足りません: ' + shortages.join('、') : '');
+		return;
+	}
+	var html = '';
+	for (var i = 0; i < analysisArrangements.length; i++){
+		var a = analysisArrangements[i];
+		html += '<div class="analyzeItem arrangeItem">' + (i+1) + '. ' + a.combos + 'コンボ / ' + (a.stages <= 1 ? '連鎖なし' : a.stages + '段連鎖')
+			+ ' <button onclick="requestAction(\'loadarrangement\', ' + i + ')">盤面に読込</button>'
+			+ ' <button onclick="requestAction(\'showarrangement\', ' + i + ')">消え方を見る</button>';
+		if (conds.length) {
+			html += '<div class="condResult">';
+			for (var j = 0; j < conds.length; j++) html += '<span class="condOk">✓' + escapeHtml(conditionLabel(conds[j])) + '</span>';
+			html += '</div>';
+		}
+		html += miniBoardHtml({ rows: rows, cols: cols, pattern: arrangementPattern(a.board) }) + '</div>';
+	}
+	container.innerHTML = html;
+	setAnalyzeStatus('配置の探索完了: 最大' + analysisArrangements[0].combos + 'コンボ (理論値 ' + target + 'コンボ)');
+}
+
+function loadArrangement(index, showClears){
+	var a = analysisArrangements[index];
+	if (!a) return;
+	// stop a clear animation still running from an earlier press, and
+	// start the combo count from zero
+	clearMemory('timeout');
+	clearMemory('score');
+	document.getElementById('entry').value = arrangementPattern(a.board);
+	requestAction('applypattern');
+	if (showClears) requestAction('solve', 3);
+}
+
 function showAnalysisSolution(index){
 	var sol = analysisSolutions[index];
 	if (!sol) return;
@@ -2638,6 +2818,9 @@ function requestAction(action, modifier){ // CLEAN IT UP
 		renderAnalysisConditions();
 	}
 	if (action == 'showsolution') showAnalysisSolution(modifier);
+	if (action == 'arrange') runArrangement();
+	if (action == 'loadarrangement') loadArrangement(modifier, false);
+	if (action == 'showarrangement') loadArrangement(modifier, true);
 	if (action == 'playsolution') {
 		var solToPlay = analysisSolutions[modifier];
 		if (solToPlay) {

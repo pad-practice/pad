@@ -13,10 +13,10 @@
 	<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
 	<script src="https://code.jquery.com/jquery-1.11.3.min.js"></script>
 	<script src="https://code.jquery.com/ui/1.11.3/jquery-ui.min.js"></script>
-	<link rel="stylesheet" type="text/css" href="pad.css?v15">
+	<link rel="stylesheet" type="text/css" href="pad.css?v16">
 	<link rel="stylesheet" type="text/css" href="menu.css?v4">
 	<link rel="shortcut icon" href="favicon.ico" />
-	<script src="pad.js?v22"></script>
+	<script src="pad.js?v25"></script>
 </head>
 <body><div id="wrapwrap">
 	<div id="lineback">
@@ -57,6 +57,7 @@
 				</div>
 			</div>
 			<button onclick="requestAction('analyze')" class="modebutton">解析開始</button>
+			<button onclick="requestAction('arrange')" class="modebutton" title="今の盤面のドロップの数で、条件をすべて含む配置を探します">配置を探す</button>
 			<div id="analyzeStatus"></div>
 			<div id="analyzeResults"></div>
 		</div>

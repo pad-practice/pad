@@ -645,6 +645,15 @@ border:1px solid #616261; -webkit-border-radius: 3px; -moz-border-radius: 3px;bo
 #analyzeObjective {
 	margin-top:6px;
 }
+.arrangeItem {
+	padding:6px 0;
+	border-bottom:1px solid var(--panel-border);
+}
+.arrangeItem .miniBoard {
+	max-width:180px;
+	margin:4px 0 0 1.2em;
+	border-width:4px;
+}
 .condResult {
 	font-size:12px;
 	padding-left:1.2em;
