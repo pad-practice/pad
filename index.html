@@ -16,7 +16,7 @@
 	<link rel="stylesheet" type="text/css" href="pad.css?v17">
 	<link rel="stylesheet" type="text/css" href="menu.css?v4">
 	<link rel="shortcut icon" href="favicon.ico" />
-	<script src="pad.js?v26"></script>
+	<script src="pad.js?v27"></script>
 </head>
 <body><div id="wrapwrap">
 	<div id="lineback">
@@ -60,7 +60,7 @@
 					<div class="scoreRulesTitle">加点ルール</div>
 					<div id="scoreRuleList"></div>
 					<div class="scoreRuleRow">
-						同じ色の2コンボ目以降 1コンボごとに +<input type="number" id="sameColorBonus" class="ruleNum" min="0" step="100" onchange="updateSameColorBonus(this.value)">点
+						同じ色(火水木光闇)の2コンボ目以降 1コンボごとに +<input type="number" id="sameColorBonus" class="ruleNum" min="0" step="100" onchange="updateSameColorBonus(this.value)">点
 					</div>
 					<button onclick="addScoreRule()" class="modebutton">＋ ルールを追加</button>
 					<button onclick="resetScoreRules()" class="modebutton">初期値に戻す</button>

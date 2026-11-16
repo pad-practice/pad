@@ -972,10 +972,12 @@ function maxPossibleCombosFromCounts(b){
 // only used by 'atleast'; `cascade` says whether groups formed by
 // cascades (落ちコン) count, or only ones the move itself lines up.
 //
-// Row / column only need to *contain* a full line, so other orbs may be
-// joined to them. Every other shape only counts when the cleared group
-// is exactly that shape: a same-coloured orb touching it would merge
-// into a bigger, different group.
+// A row only needs to *contain* a full line, so other orbs may be joined
+// to it. Every other shape — a column included (exactly one full column,
+// e.g. 5 orbs on a 6x5 board; 5 down with 2 more beside them is a 7-orb
+// clear, not a column) — only counts when the cleared group is exactly
+// that shape: a same-coloured orb touching it would merge into a bigger,
+// different group.
 var CLEAR_SHAPES = {
 	cross:   { label: '十字', cascade: false },
 	L:       { label: 'L字', cascade: false },
@@ -1048,11 +1050,7 @@ function groupShapes(cells){
 		for (xx = 0; xx < rows && full; xx++) if (!has(xx, yy)) full = false;
 		r.row = full;
 	}
-	if (h == cols) for (xx = minX; xx <= maxX && !r.col; xx++){
-		full = true;
-		for (yy = 0; yy < cols && full; yy++) if (!has(xx, yy)) full = false;
-		r.col = full;
-	}
+	r.col = (n == cols && w == 1 && h == cols);
 	return r;
 }
 
@@ -1066,7 +1064,7 @@ function groupMatchesCondition(cond, shapes){
 // the same colour there would merge in and spoil the shape).
 function buildShapeTemplates(cond){
 	var list = [];
-	var exact = !(cond.shape == 'row' || cond.shape == 'col' || cond.shape == 'atleast');
+	var exact = !(cond.shape == 'row' || cond.shape == 'atleast');
 	function add(cellsXY){
 		var cells = [], inT = {}, border = [], seenB = {}, i;
 		for (i = 0; i < cellsXY.length; i++){
@@ -1219,7 +1217,8 @@ function conditionShortages(b, conds){
 // points instead of combos: each cleared group earns the points of every
 // rule its shape and colour match (cascade groups included, as in the
 // game), and every combo after the first of the same colour earns
-// sameColorBonus. Plain combos earn nothing by themselves. The defaults
+// sameColorBonus — for 火水木光闇 only (SAME_COLOR_BONUS_COLORS), not
+// heart, jammer or poison. Plain combos earn nothing by themselves. The defaults
 // are one ranking dungeon's rules; the user can edit them.
 var SCORE_RULES_KEY = 'puzzlePracticeScoreRules';
 var DEFAULT_SCORE_RULES = [
@@ -1230,6 +1229,7 @@ var DEFAULT_SCORE_RULES = [
 	{ shape: 'col',   color: 'heart', size: 5, points: 1700 }
 ];
 var DEFAULT_SAME_COLOR_BONUS = 1000;
+var SAME_COLOR_BONUS_COLORS = { red: true, blue: true, green: true, light: true, dark: true };
 var scoreRules = DEFAULT_SCORE_RULES.map(function(r){ return Object.assign({}, r); });
 var sameColorBonus = DEFAULT_SAME_COLOR_BONUS;
 
@@ -1255,7 +1255,7 @@ function makePointsCounter(){
 		},
 		total: function(){
 			var t = pts;
-			for (var c in perColor) t += Math.max(0, perColor[c] - 1) * sameColorBonus;
+			for (var c in perColor) if (SAME_COLOR_BONUS_COLORS[c]) t += Math.max(0, perColor[c] - 1) * sameColorBonus;
 			return t;
 		}
 	};
@@ -1279,7 +1279,8 @@ function colorPointPlans(counts, topK){
 				if (!chosen.length) return;
 				var pts = 0;
 				for (var k = 0; k < chosen.length; k++) pts += chosen[k].pts;
-				out.push({ pts: pts + (chosen.length - 1) * sameColorBonus, items: chosen.slice() });
+				if (SAME_COLOR_BONUS_COLORS[color]) pts += (chosen.length - 1) * sameColorBonus;
+				out.push({ pts: pts, items: chosen.slice() });
 				return;
 			}
 			rec(idx + 1, left);
@@ -1483,7 +1484,7 @@ function buildConditionLayouts(base, conds, maxLayouts){
 	var have = {};
 	for (i = 0; i < base.length; i++) if (base[i]) have[base[i]] = (have[base[i]] || 0) + 1;
 	var options = inst.map(function(cd){
-		var exact = !(cd.shape == 'row' || cd.shape == 'col' || cd.shape == 'atleast');
+		var exact = !(cd.shape == 'row' || cd.shape == 'atleast');
 		var colors = cd.color == 'any'
 			? CONDITION_COLORS.map(function(c){ return c[0]; }).filter(function(c){ return c != 'any'; })
 			: [cd.color];
@@ -1557,7 +1558,7 @@ function buildCascadeLayouts(base, conds, maxLayouts){
 	for (i = 0; i < conds.length; i++) for (var n = 0; n < conds[i].count; n++) inst.push(conds[i]);
 	var have = {};
 	for (i = 0; i < base.length; i++) if (base[i]) have[base[i]] = (have[base[i]] || 0) + 1;
-	function exactShape(cd){ return !(cd.shape == 'row' || cd.shape == 'col' || cd.shape == 'atleast'); }
+	function exactShape(cd){ return !(cd.shape == 'row' || cd.shape == 'atleast'); }
 	function colorsOf(cd){
 		return cd.color == 'any'
 			? CONDITION_COLORS.map(function(c){ return c[0]; }).filter(function(c){ return c != 'any'; })
