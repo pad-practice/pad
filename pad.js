@@ -3186,6 +3186,27 @@ $(function(){		// CURSOR AT AND MOVING ORB SIZE
 		if (e.touches.length > 1) e.preventDefault();
 	}, { passive: false });
 
+	// iOS scrolls the whole page up to keep a focused input (ランダム生成の
+	// 個数, 解析の条件 …) clear of the keyboard, but the practice page can't
+	// be scrolled, so after the keyboard closes the page stayed shifted
+	// with the top buttons out of reach. Put it back once no input has
+	// focus any more, and again when the keyboard finishes closing.
+	function isTextInput(el){
+		return el && (el.tagName == 'INPUT' || el.tagName == 'TEXTAREA' || el.tagName == 'SELECT');
+	}
+	function resetPageScroll(){
+		if (isTextInput(document.activeElement)) return; // moved on to another input
+		window.scrollTo(0, 0);
+		document.documentElement.scrollTop = 0;
+		document.body.scrollTop = 0;
+	}
+	document.addEventListener('focusout', function(e){
+		if (isTextInput(e.target)) setTimeout(resetPageScroll, 100);
+	});
+	if (window.visualViewport) window.visualViewport.addEventListener('resize', function(){
+		if (!isTextInput(document.activeElement)) resetPageScroll();
+	});
+
 	// Keeps the orb-count bar in sync with any board change (paints,
 	// generation, clears, refills) without touching every code path.
 	new MutationObserver(debounce(updateOrbCountBar, 60)).observe(
