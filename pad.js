@@ -1217,9 +1217,11 @@ function conditionShortages(b, conds){
 // points instead of combos: each cleared group earns the points of every
 // rule its shape and colour match (cascade groups included, as in the
 // game), and every combo after the first of the same colour earns
-// sameColorBonus — for 火水木光闇 only (SAME_COLOR_BONUS_COLORS), not
-// heart, jammer or poison. Plain combos earn nothing by themselves. The defaults
-// are one ranking dungeon's rules; the user can edit them.
+// sameColorBonus — only for the colours ticked in sameColorBonusColors,
+// chosen from 火水木光闇 (whether a team has the skill for a colour
+// varies; heart, jammer and poison never get it). Plain combos earn
+// nothing by themselves. The defaults are one ranking dungeon's rules;
+// the user can edit them.
 var SCORE_RULES_KEY = 'puzzlePracticeScoreRules';
 var DEFAULT_SCORE_RULES = [
 	{ shape: 'row',   color: 'any',   size: 5, points: 2000 },
@@ -1229,9 +1231,11 @@ var DEFAULT_SCORE_RULES = [
 	{ shape: 'col',   color: 'heart', size: 5, points: 1700 }
 ];
 var DEFAULT_SAME_COLOR_BONUS = 1000;
-var SAME_COLOR_BONUS_COLORS = { red: true, blue: true, green: true, light: true, dark: true };
+var BONUS_COLOR_CHOICES = ['red', 'blue', 'green', 'light', 'dark'];
+var sameColorBonusColors = {}; // colour -> true when it gets the same-colour bonus
 var scoreRules = DEFAULT_SCORE_RULES.map(function(r){ return Object.assign({}, r); });
 var sameColorBonus = DEFAULT_SAME_COLOR_BONUS;
+BONUS_COLOR_CHOICES.forEach(function(c){ sameColorBonusColors[c] = true; });
 
 // Points one cleared group earns from the rules (not counting the
 // same-colour bonus, which depends on the whole clear).
@@ -1255,7 +1259,7 @@ function makePointsCounter(){
 		},
 		total: function(){
 			var t = pts;
-			for (var c in perColor) if (SAME_COLOR_BONUS_COLORS[c]) t += Math.max(0, perColor[c] - 1) * sameColorBonus;
+			for (var c in perColor) if (sameColorBonusColors[c]) t += Math.max(0, perColor[c] - 1) * sameColorBonus;
 			return t;
 		}
 	};
@@ -1279,7 +1283,7 @@ function colorPointPlans(counts, topK){
 				if (!chosen.length) return;
 				var pts = 0;
 				for (var k = 0; k < chosen.length; k++) pts += chosen[k].pts;
-				if (SAME_COLOR_BONUS_COLORS[color]) pts += (chosen.length - 1) * sameColorBonus;
+				if (sameColorBonusColors[color]) pts += (chosen.length - 1) * sameColorBonus;
 				out.push({ pts: pts, items: chosen.slice() });
 				return;
 			}
@@ -1305,12 +1309,16 @@ function loadScoreRules(){
 		if (saved && saved.rules) {
 			scoreRules = saved.rules.filter(function(r){ return CLEAR_SHAPES[r.shape]; });
 			sameColorBonus = typeof saved.sameColorBonus == 'number' ? saved.sameColorBonus : DEFAULT_SAME_COLOR_BONUS;
+			if (saved.bonusColors) {
+				sameColorBonusColors = {};
+				saved.bonusColors.forEach(function(c){ if (BONUS_COLOR_CHOICES.indexOf(c) >= 0) sameColorBonusColors[c] = true; });
+			}
 		}
 	} catch (e) {}
 }
 
 function saveScoreRules(){
-	try { localStorage.setItem(SCORE_RULES_KEY, JSON.stringify({ rules: scoreRules, sameColorBonus: sameColorBonus })); } catch (e) {}
+	try { localStorage.setItem(SCORE_RULES_KEY, JSON.stringify({ rules: scoreRules, sameColorBonus: sameColorBonus, bonusColors: Object.keys(sameColorBonusColors) })); } catch (e) {}
 }
 
 function renderScoreRules(){
@@ -1334,6 +1342,20 @@ function renderScoreRules(){
 	}
 	document.getElementById('scoreRuleList').innerHTML = html;
 	document.getElementById('sameColorBonus').value = sameColorBonus;
+	var colorHtml = '';
+	for (i = 0; i < BONUS_COLOR_CHOICES.length; i++){
+		var c = BONUS_COLOR_CHOICES[i];
+		colorHtml += '<label class="bonusColor"><input type="checkbox"' + (sameColorBonusColors[c] ? ' checked' : '')
+			+ ' onchange="toggleBonusColor(\'' + c + '\', this.checked)">' + conditionColorLabel(c) + '</label>';
+	}
+	document.getElementById('sameColorBonusColors').innerHTML = colorHtml;
+}
+
+function toggleBonusColor(color, on){
+	if (on) sameColorBonusColors[color] = true;
+	else delete sameColorBonusColors[color];
+	saveScoreRules();
+	renderScoreRules();
 }
 
 function addScoreRule(){
@@ -1362,6 +1384,8 @@ function updateSameColorBonus(value){
 function resetScoreRules(){
 	scoreRules = DEFAULT_SCORE_RULES.map(function(r){ return Object.assign({}, r); });
 	sameColorBonus = DEFAULT_SAME_COLOR_BONUS;
+	sameColorBonusColors = {};
+	BONUS_COLOR_CHOICES.forEach(function(c){ sameColorBonusColors[c] = true; });
 	saveScoreRules();
 	renderScoreRules();
 }

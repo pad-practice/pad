@@ -881,3 +881,11 @@ html.practicePage, html.practicePage * {
 	#lineback .image6 { margin:3px 2px; }
 	#hamburgerBtn { margin:2px 6px; }
 }
+.bonusColor {
+	margin-left:8px;
+	white-space:nowrap;
+}
+.bonusColor input {
+	vertical-align:middle;
+	margin-right:2px;
+}
