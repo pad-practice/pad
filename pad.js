@@ -2018,17 +2018,47 @@ function runArrangement(){
 		if (a.stages != b.stages) return a.stages - b.stages;
 		return b.combos - a.combos;
 	}
-	var counts = {};
-	for (i = 0; i < pool.length; i++) counts[pool[i]] = (counts[pool[i]] || 0) + 1;
+	// counted from the sorted orbs so the colours come in the same order
+	// (and draw the same random numbers) however the board is arranged
+	var counts = {}, sortedOrbs = pool.slice().sort();
+	for (i = 0; i < sortedOrbs.length; i++) counts[sortedOrbs[i]] = (counts[sortedOrbs[i]] || 0) + 1;
 	var seed = 12345;
 	function rnd(){ seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
-	var starts = [];
-	if (conds.length){
-		starts = buildConditionLayouts(pool, conds, params.restarts);
-		if (conds.some(function(c){ return c.cascade; })) starts = starts.concat(buildCascadeLayouts(pool, conds, params.restarts));
+	// The result must depend only on how many orbs of each colour there
+	// are, not on where they sit now. The layout builders keep the
+	// placements closest to the board they're given (right for routes,
+	// wrong here: far-off placements, e.g. a column, were never tried
+	// unless the board was arranged by hand first), so each restart gives
+	// them the same orbs freshly shuffled instead of the current board.
+	// The orbs are sorted first and the seed is fixed, so the same counts
+	// always give the same result.
+	var canonical = sortedOrbs;
+	function shuffledBoard(){
+		var sb = canonical.slice();
+		for (var k = sb.length - 1; k > 0; k--){ var j = Math.floor(rnd() * (k + 1)), t = sb[k]; sb[k] = sb[j]; sb[j] = t; }
+		return sb;
 	}
-	if (usePoints) starts = starts.concat(pointPlanLayouts(pool, counts, conds, Math.ceil(params.restarts / 2), rnd));
-	if (!starts.length) starts = [null];
+	var anyCascade = conds.some(function(c){ return c.cascade; });
+	// plan point shapes only with the orbs the conditions leave over
+	var planCounts = {};
+	for (var pc in counts) planCounts[pc] = counts[pc];
+	for (i = 0; i < conds.length; i++)
+		if (conds[i].color != 'any' && planCounts[conds[i].color] !== undefined)
+			planCounts[conds[i].color] = Math.max(0, planCounts[conds[i].color] - conditionOrbCount(conds[i]) * conds[i].count);
+	var plans = usePoints ? colorPointPlans(planCounts, 3) : null;
+	// A starting layout for restart r (or null: start from a random fill).
+	function makeStart(r){
+		var base = shuffledBoard(), lays;
+		if (usePoints) return pointPlanLayout(base, plans, conds, r === 0, rnd);
+		if (!conds.length) return null;
+		// alternate layouts finished on the move and ones finished by a cascade
+		if (anyCascade && r % 2 == 1) {
+			lays = buildCascadeLayouts(base, conds, 1);
+			if (lays.length) return lays[0];
+		}
+		lays = buildConditionLayouts(base, conds, 1);
+		return lays.length ? lays[0] : null;
+	}
 	var results = {}, best = null;
 	function keep(b, e){
 		if (e.met < totalNeed) return;
@@ -2044,7 +2074,7 @@ function runArrangement(){
 	document.getElementById('analyzeResults').innerHTML = '';
 
 	function startRestart(){
-		var lay = starts[restart % starts.length], left = {}, c, k;
+		var lay = makeStart(restart), left = {}, c, k;
 		for (c in counts) left[c] = counts[c];
 		b = [];
 		for (k = 0; k < pool.length; k++) b.push(null);
@@ -2104,31 +2134,33 @@ function arrangementPattern(board){
 	return board.map(function(c){ return toLetter(c).toUpperCase(); }).join('');
 }
 
-// Starting layouts for a points search: each colour's best point plans
-// (colorPointPlans) turned into shape conditions, together with the
-// user's own conditions, and laid out like a condition search. When the
-// shapes don't all fit, the last ones are dropped until a layout exists.
-function pointPlanLayouts(pool, counts, conds, variants, rnd){
-	var plans = colorPointPlans(counts, 2), colors = Object.keys(plans), out = [];
-	for (var v = 0; v < variants; v++){
-		var cs = conds.slice(), c, k;
-		for (c = 0; c < colors.length; c++){
-			var list = plans[colors[c]];
-			if (!list.length) continue;
-			var plan = list[v === 0 ? 0 : Math.floor(rnd() * list.length)];
-			for (k = 0; k < plan.items.length; k++){
-				var r = plan.items[k].rule;
-				if (r) cs.push({ shape: r.shape, color: colors[c], count: 1, size: r.size, cascade: true });
-			}
-		}
-		while (cs.length > conds.length){
-			for (k = 0; k < cs.length; k++) if (!cs[k].templates) cs[k].templates = buildShapeTemplates(cs[k]);
-			var lays = buildConditionLayouts(pool, cs, 2);
-			if (lays.length){ out = out.concat(lays); break; }
-			cs.pop();
+// A starting layout for a points search: one point plan per colour
+// (colorPointPlans — the best one when `best`, otherwise a random one of
+// the top few) turned into shape conditions, together with the user's
+// own conditions, and laid out on `base` like a condition search. When
+// the shapes don't all fit, the lowest-scoring ones are dropped until a
+// layout exists.
+function pointPlanLayout(base, plans, conds, best, rnd){
+	var extra = [], c, k;
+	for (c in plans){
+		var list = plans[c];
+		if (!list.length) continue;
+		var plan = list[best ? 0 : Math.floor(rnd() * list.length)];
+		for (k = 0; k < plan.items.length; k++){
+			var r = plan.items[k].rule;
+			if (r) extra.push({ shape: r.shape, color: c, count: 1, size: r.size, cascade: true, points: r.points });
 		}
 	}
-	return out;
+	extra.sort(function(a, b){ return b.points - a.points; });
+	for (;;){
+		var cs = conds.concat(extra);
+		if (!cs.length) return null;
+		for (k = 0; k < cs.length; k++) if (!cs[k].templates) cs[k].templates = buildShapeTemplates(cs[k]);
+		var lays = buildConditionLayouts(base, cs, 1);
+		if (lays.length) return lays[0];
+		if (!extra.length) return null;
+		extra.pop();
+	}
 }
 
 function renderArrangements(conds, totalNeed, target, shortages, usePoints){

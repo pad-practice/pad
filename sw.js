@@ -6,7 +6,7 @@
 // Bump CACHE_NAME whenever APP_SHELL's contents change (a file added/
 // removed, or one of the ?vN cache-busters elsewhere bumped) so old
 // clients pick up the new list instead of being stuck on a stale one.
-var CACHE_NAME = 'puzzle-practice-v25';
+var CACHE_NAME = 'puzzle-practice-v26';
 
 var APP_SHELL = [
 	'./',
@@ -17,7 +17,7 @@ var APP_SHELL = [
 	'pad.css?v18',
 	'menu.css?v4',
 	'rankings.css?v4',
-	'pad.js?v29',
+	'pad.js?v30',
 	'menu.js?v1',
 	'sheetData.js?v1',
 	'rankings.js?v6',
